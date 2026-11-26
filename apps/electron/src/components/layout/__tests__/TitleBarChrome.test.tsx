@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { TitleBar } from '../TitleBar'
+import { mediaFloorPx } from '../HeaderMedia'
 import { useDeviceConnection } from '@/hooks/useDeviceConnection'
 
 vi.mock('@/hooks/useDeviceConnection', () => ({
@@ -135,9 +136,11 @@ describe('Integrated titlebar — search left, media right', () => {
     expect(follows(media, notifications)).toBe(true)
     // Left-aligned: the search no longer centres itself.
     expect(search).not.toHaveClass('mx-auto')
-    // The media cell is a size container with a floor that fits Pause + Stop
-    // or a recording's dot, time and Stop; the search keeps its own floor.
-    expect(screen.getByTestId('header-media-cell')).toHaveClass('@container', 'min-w-[6rem]', 'flex-1')
+    // The media cell is a size container whose floor is what must always fit;
+    // the search keeps its own floor.
+    const cell = screen.getByTestId('header-media-cell')
+    expect(cell).toHaveClass('@container', 'flex-1')
+    expect(cell.style.minWidth).toBe(`${mediaFloorPx(false, false, false)}px`)
     // Idle: the media area offers Record and nothing else.
     expect(within(media).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Record'])
   })

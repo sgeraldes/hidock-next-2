@@ -129,7 +129,7 @@ function useDeviceLiveSession(enabled: boolean): DeviceAudioDiagnosticsState | n
   return enabled ? state : null
 }
 
-function PcRecordingSegment() {
+function PcRecordingSegment({ compact }: { compact: boolean }) {
   const status = usePcRecorderStore((s) => s.status)
   const elapsed = usePcRecorderStore((s) => s.elapsed)
   const stop = usePcRecorderStore((s) => s.stop)
@@ -145,7 +145,7 @@ function PcRecordingSegment() {
       >
         <RecordingDot />
         <span className="hidden @3xs:inline">{status === 'starting' ? 'Starting' : saving ? 'Saving' : 'Recording'}</span>
-        <span className={CLOCK}>{formatDuration(elapsed)}</span>
+        <span className={cn(CLOCK, compact && 'hidden @3xs:inline')}>{formatDuration(elapsed)}</span>
       </button>
       <button
         type="button"
@@ -161,7 +161,7 @@ function PcRecordingSegment() {
   )
 }
 
-function LiveSegment({ live }: { live: DeviceAudioDiagnosticsState }) {
+function LiveSegment({ live, compact }: { live: DeviceAudioDiagnosticsState; compact: boolean }) {
   const revealLive = useRevealLive()
   const [stopping, setStopping] = useState(false)
   const label = live.session.transcribe ? 'Live transcription' : 'Live audio'
@@ -188,7 +188,7 @@ function LiveSegment({ live }: { live: DeviceAudioDiagnosticsState }) {
         <RecordingDot paused={paused} />
         <span className="hidden @3xs:inline">{paused ? `${label}, paused` : label}</span>
         <span className="sr-only @3xs:hidden">{paused ? 'paused' : ''}</span>
-        <span className={CLOCK}>{formatDuration(live.diagnostics.sampleElapsedMs / 1000)}</span>
+        <span className={cn(CLOCK, compact && 'hidden @3xs:inline')}>{formatDuration(live.diagnostics.sampleElapsedMs / 1000)}</span>
       </button>
       <button
         type="button"
@@ -243,6 +243,9 @@ function usePlaybackView(): PlaybackView | null {
   // result (play with autoPlay false) does not take over the header.
   const [playedId, setPlayedId] = useState<string | null>(null)
   if (recordingId && recordingPlaying && playedId !== recordingId) setPlayedId(recordingId)
+  // The playback ended (or was stopped): a later load of the same recording
+  // must play before it shows here again.
+  if (!recordingId && playedId !== null) setPlayedId(null)
 
   if (element) {
     const media = element.element
@@ -393,24 +396,59 @@ export function HeaderMedia() {
   const recording = recorderStatus === 'starting' || recorderStatus === 'recording' || recorderStatus === 'saving'
   const liveActive = live !== null && live.session.status !== 'idle'
   const capturing = recording || liveActive
+  const segments = Number(recording) + Number(liveActive) + Number(playback !== null)
+  // Several segments at once drop their clocks below 16rem, so each keeps only
+  // what controls it (a capture: dot and Stop; a playback: Play and Stop).
+  const compact = segments > 1
 
   return (
-    // Sized by its container (TitleBar's media cell, an @container with a
-    // 6rem floor): details step aside by the width this area really has, so
-    // the Pause, Stop and recording controls always fit and nothing spills
-    // over the search, the right cluster or the window controls. The padding
-    // keeps focus rings visible inside the clip.
-    <div className="flex min-w-0 shrink items-center justify-end gap-3 overflow-hidden p-0.5" aria-label="Media" role="region">
-      {recording && <PcRecordingSegment />}
-      {liveActive && <LiveSegment live={live} />}
-      {playback && <PlaybackSegment view={playback} />}
-      {/* Record is the whole area when nothing plays; next to a playback it
-          shows only when there is room for both. */}
-      {!capturing && (
-        <div className={playback ? 'hidden @sm:flex' : 'flex'}>
-          <RecordControl deviceConnected={deviceConnected} />
-        </div>
-      )}
+    // The media cell: a size container that takes the free width between the
+    // search and the right cluster. Details step aside by the width it really
+    // has, and its floor is what must always fit, so nothing it holds is
+    // clipped and nothing spills over the search, the right cluster or the
+    // window controls. The padding keeps focus rings visible inside the clip.
+    <div
+      data-testid="header-media-cell"
+      className="@container flex min-w-0 flex-1 justify-end"
+      style={{ minWidth: mediaFloorPx(recording, liveActive, playback !== null) }}
+    >
+      <div className="flex min-w-0 shrink items-center justify-end gap-3 overflow-hidden p-0.5" aria-label="Media" role="region">
+        {recording && <PcRecordingSegment compact={compact} />}
+        {liveActive && <LiveSegment live={live} compact={compact} />}
+        {playback && <PlaybackSegment view={playback} />}
+        {/* Record is the whole area when nothing plays; next to a playback it
+            shows only when there is room for both. */}
+        {!capturing && (
+          <div className={playback ? 'hidden @sm:flex' : 'flex'}>
+            <RecordControl deviceConnected={deviceConnected} />
+          </div>
+        )}
+      </div>
     </div>
   )
+}
+
+/** Widths of what never hides, in px (h-7 icon buttons are 28 px). */
+const FLOOR = {
+  /** p-0.5 on both sides. */
+  padding: 4,
+  /** gap-3 between segments. */
+  gap: 12,
+  /** A capture alone: dot button with its clock (up to h:mm:ss, about 84 px), gap, Stop. */
+  capture: 84 + 6 + 28,
+  /** A capture next to another segment: dot button without the clock, gap, Stop. */
+  captureCompact: 20 + 6 + 28,
+  /** Play or Pause, gap, Stop. */
+  playback: 28 + 4 + 28,
+  /** The Record button, icon and caret. */
+  record: 52
+}
+
+/** The narrowest the media cell may get without clipping a control that stops or pauses. */
+export function mediaFloorPx(recording: boolean, live: boolean, playback: boolean): number {
+  const captures = Number(recording) + Number(live)
+  const segments = captures + Number(playback)
+  if (segments === 0) return FLOOR.padding + FLOOR.record
+  const capture = segments > 1 ? FLOOR.captureCompact : FLOOR.capture
+  return FLOOR.padding + captures * capture + (playback ? FLOOR.playback : 0) + (segments - 1) * FLOOR.gap
 }

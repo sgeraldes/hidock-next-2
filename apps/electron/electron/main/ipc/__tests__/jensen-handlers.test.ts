@@ -642,9 +642,13 @@ describe('main-process library transfer', () => {
     const pushes = () => event.sender.send.mock.calls.filter(([channel]) => channel === 'jensen:audio-diagnostics')
 
     await mockHandlers['jensen:startRealtime'](event)
-    expect(pushes().at(-1)?.[1].session.status).not.toBe('idle')
+    // The start push itself, not one the later stop sends.
+    const afterStart = pushes()
+    expect(afterStart).toHaveLength(1)
+    expect(afterStart[0][1].session.status).toMatch(/^(starting|streaming)$/)
     await mockHandlers['jensen:stopRealtime'](event)
-    expect(pushes().at(-1)?.[1]).toMatchObject({ session: { status: 'idle' } })
+    expect(pushes()).toHaveLength(2)
+    expect(pushes()[1][1]).toMatchObject({ session: { status: 'idle' } })
   })
 
   it('an unplugged device saves the stream, and the next stream gets its own file', async () => {

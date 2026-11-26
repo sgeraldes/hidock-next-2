@@ -3,9 +3,9 @@
  * Record control when nothing does.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
-import { HeaderMedia, LIVE_SECTION_ID } from '../HeaderMedia'
+import { HeaderMedia, LIVE_SECTION_ID, mediaFloorPx } from '../HeaderMedia'
 import { useUIStore } from '@/store/useUIStore'
 import { useAppStore } from '@/store/useAppStore'
 import { usePcRecorderStore } from '@/store/usePcRecorderStore'
@@ -200,13 +200,46 @@ describe('HeaderMedia for a recording loaded without playing', () => {
 })
 
 describe('HeaderMedia at narrow widths', () => {
-  it('never hides the controls that pause or stop', () => {
+  it('never hides the controls that pause or stop, and its floor fits them all', () => {
     useUIStore.setState({ currentlyPlayingId: 'rec-1', currentlyPlayingPath: '/a.mp3', isPlaying: true, playbackCurrentTime: 1, playbackDuration: 10 })
     usePcRecorderStore.setState({ visible: true, status: 'recording', elapsed: 3 })
     renderMedia()
     for (const name of ['Pause', 'Stop playback', 'Stop recording']) {
       expect(screen.getByRole('button', { name }).className).not.toMatch(/(^|\s)hidden(\s|$)/)
     }
+    // Recording and playback together: the clock steps aside below 16rem.
+    const clock = within(screen.getByRole('group', { name: 'Recording on this PC' })).getByText('0:03')
+    expect(clock).toHaveClass('hidden', '@3xs:inline')
+    expect(screen.getByTestId('header-media-cell').style.minWidth).toBe(`${mediaFloorPx(true, false, true)}px`)
+  })
+
+  it('grows its floor with what it holds', () => {
+    const idle = mediaFloorPx(false, false, false)
+    const playing = mediaFloorPx(false, false, true)
+    const recording = mediaFloorPx(true, false, false)
+    const both = mediaFloorPx(true, false, true)
+    const all = mediaFloorPx(true, true, true)
+    // Pause + Stop (60) and a recording's dot, clock and Stop (118) with padding.
+    expect(playing).toBe(64)
+    expect(recording).toBe(122)
+    expect(idle).toBeLessThan(playing)
+    // Together: compact capture (54) + gap (12) + playback (60) + padding.
+    expect(both).toBe(130)
+    expect(all).toBeGreaterThan(both)
+  })
+})
+
+describe('HeaderMedia after a playback ends', () => {
+  it('does not show a later load of the same recording until it plays again', () => {
+    useAppStore.setState({ unifiedRecordings: [{ id: 'rec-1', filename: 'a.mp3', meetingSubject: 'Weekly sync', location: 'local-only', dateRecorded: new Date() }] } as never)
+    useUIStore.setState({ currentlyPlayingId: 'rec-1', currentlyPlayingPath: '/a.mp3', isPlaying: true, playbackCurrentTime: 5, playbackDuration: 190 })
+    renderMedia()
+    expect(screen.getByRole('slider', { name: 'Playback position' })).toBeInTheDocument()
+    act(() => useUIStore.setState({ currentlyPlayingId: null, currentlyPlayingPath: null, isPlaying: false }))
+    // A find result loads it again without playing.
+    act(() => useUIStore.setState({ currentlyPlayingId: 'rec-1', currentlyPlayingPath: '/a.mp3', isPlaying: false }))
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Record' })).toBeInTheDocument()
   })
 })
 

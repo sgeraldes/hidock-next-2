@@ -198,12 +198,10 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
         </form>
         <NewMenu />
 
-        {/* MEDIA AREA — what plays or records, or the Record control. It takes
-            the free space between the search and the right cluster and gives
-            way first when the window narrows. */}
-        <div data-testid="header-media-cell" className="@container flex min-w-[6rem] flex-1 justify-end">
-          <HeaderMedia />
-        </div>
+        {/* MEDIA AREA — what plays or records, or the Record control. A size
+            container that takes the free space between the search and the
+            right cluster; its floor (mediaFloorPx) is what must always fit. */}
+        <HeaderMedia />
 
         {/* RIGHT CLUSTER — a grouped rhythm rather than one uniform tiny gap: the
             notifications, activity and resource-monitor controls sit
