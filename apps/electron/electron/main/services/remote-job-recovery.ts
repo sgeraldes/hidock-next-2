@@ -305,6 +305,10 @@ export async function recoverRemoteJobs(config: { modelHostUrl?: string; modelHo
       (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) return
   for (const saved of listRecoverableRemoteJobs()) {
     const request = saved.identity.request!
+    // Fix times keeps its alignment jobs in memory; one that reached this store anyway
+    // belongs to a click that is long gone, and recovering it would start a pipeline run.
+    if (request.stage === 'alignment') continue
+    const stage = request.stage
     // Never forward a current credential to an old/different host.
     const observerKey = saved.recordingId + ':' + saved.key
     if (request.base !== base || !saved.identity.id || observers.has(observerKey) ||
@@ -398,7 +402,7 @@ export async function recoverRemoteJobs(config: { modelHostUrl?: string; modelHo
           if (job.status === 'completed') {
             if (!job.result || createHash('sha256').update(JSON.stringify(job.result)).digest('hex') !== job.resultHash ||
                 job.result.model !== request.model || typeof job.result.modelVersion !== 'string') throw new Error('Recovered remote result failed verification')
-            validateRemoteResult(job.result, request.stage, request.model)
+            validateRemoteResult(job.result, stage, request.model)
             validateChannelResult(job.result, request.channelMode, request.audioHash, request.channelMap, request.activeChannels)
             if (request.channelMode === 'separate') {
               const audioState = new RecordedAudioState()
@@ -421,7 +425,7 @@ export async function recoverRemoteJobs(config: { modelHostUrl?: string; modelHo
             }
             assertRecoveryOwnership(observer)
             store.saveResult!(saved.key, { ...job.result, hostJobId: job.id })
-            if (request.stage === 'transcription' && job.result.text.trim()) {
+            if (stage === 'transcription' && job.result.text.trim()) {
               const language = resolveRemoteWorkerLanguage(job.result.language, request.language)
               assertRecoveryOwnership(observer)
               saveStageCheckpoint(saved.recordingId, 'transcription', recordedAudioStageFingerprint(request.audioHash,
@@ -448,7 +452,7 @@ export async function recoverRemoteJobs(config: { modelHostUrl?: string; modelHo
             runId = undefined
             if (!observer.cancel) {
               assertRecoveryOwnership(observer)
-              onComplete(saved.recordingId, request.model, request.stage)
+              onComplete(saved.recordingId, request.model, stage)
             }
             return
           }
@@ -464,7 +468,7 @@ export async function recoverRemoteJobs(config: { modelHostUrl?: string; modelHo
           }
           if (!runId) {
             assertRecoveryOwnership(observer)
-            runId = createProcessingRun({ recordingId: saved.recordingId, stage: request.stage,
+            runId = createProcessingRun({ recordingId: saved.recordingId, stage,
               provider: 'remote-worker', tool: 'remote-recovery', model: request.model, execution: 'provider-managed' }).id
           }
           await new Promise(resolve => setTimeout(resolve, 1500))

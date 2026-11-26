@@ -15,6 +15,8 @@ export interface TimingSegment {
   timingOriginalStart?: number
   timingOriginalEnd?: number
   timingReviewed?: boolean
+  /** How Fix times placed this line; absent on fixes made before it was recorded. */
+  timingFixMethod?: TimingFixMethod
   /** A line written by "Transcribe this section again"; the id of that run. */
   sectionRunId?: string
   /** An old line that a section transcription replaced; hidden until that run is undone. */
@@ -28,6 +30,20 @@ export interface TimingSegment {
  * of order were under 2 s off; a new transcription is not offered for them.
  */
 export const OVERLAP_SECONDS = 2
+
+/**
+ * How Fix times placed the lines: on the words Parakeet heard on the model host,
+ * or on this computer from the VAD's speech stretches, the stored loudness
+ * envelope, or loudness decoded from the audio there and then.
+ */
+export type TimingFixMethod = 'model-host-words' | 'vad' | 'envelope' | 'decoded'
+
+export const TIMING_FIX_METHOD_LABELS: Record<TimingFixMethod, string> = {
+  'model-host-words': 'from the words Parakeet heard on the model host',
+  vad: 'from the speech stretches on this computer (the model host was not used)',
+  envelope: 'from the loudness of the audio on this computer (the model host was not used)',
+  decoded: 'from the loudness of the audio on this computer (the model host was not used)'
+}
 
 export type TimingFindingKind = 'odd_line' | 'mistimed_run' | 'duplicate'
 
@@ -49,6 +65,11 @@ export interface TimingFixPreview {
   offerSection: boolean
   /** Seconds between where the transcript puts the lines and where the lines around them say they belong. */
   displacement: number
+  /**
+   * Whether Fix times may send this range's audio to the model host: where it
+   * belongs is known and no line holds turns with their own times.
+   */
+  hostEligible?: boolean
 }
 
 export interface TimingFinding {
@@ -82,6 +103,8 @@ export interface TimingFinding {
 export interface TimingFixedRange {
   from: number
   to: number
+  /** How these lines were placed; absent on fixes made before it was recorded. */
+  method?: TimingFixMethod
 }
 
 export interface TimingSectionRun {
@@ -102,6 +125,8 @@ export interface TimingAssessment {
   reviewed: boolean
   /** Where the speech evidence came from; null when no audio evidence exists. */
   evidence: 'vad' | 'envelope' | 'decoded' | null
+  /** A paired model host offers Parakeet word alignment now (its health answer, cached for 15 s). */
+  wordAlignment?: boolean
 }
 
 export type TimingReviewAction = 'fix_times' | 'undo_fix' | 'hide' | 'show' | 'undo_section'

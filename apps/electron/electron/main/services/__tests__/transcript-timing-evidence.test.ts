@@ -133,3 +133,47 @@ describe('CodeRabbit review of #195', () => {
     expect(finding.fix?.reason).toMatch(/own times/)
   })
 })
+
+describe('which method fixed the times (Fix times on the model host)', () => {
+  const rows: TimingSegment[] = [
+    { start: 0, end: 2, text: 'uno dos' },
+    { start: 500, end: 502, text: 'tres cuatro' },
+    { start: 6, end: 8, text: 'siete ocho' }
+  ]
+
+  it('records the method on the fixed lines and in their range, and undo clears it', () => {
+    const fixed = applyTimingReview(rows, { action: 'fix_times', indices: [1], alignment: { starts: [3], ends: [4] }, method: 'model-host-words' })
+    expect(fixed[1]).toMatchObject({ start: 3, timingFixMethod: 'model-host-words' })
+    expect(fixedRanges(fixed)).toEqual([{ from: 1, to: 1, method: 'model-host-words' }])
+    const cpu = applyTimingReview(fixed, { action: 'fix_times', indices: [1], alignment: { starts: [3.2], ends: [4] }, method: 'vad' })
+    expect(fixedRanges(cpu)).toEqual([{ from: 1, to: 1, method: 'vad' }])
+    const undone = applyTimingReview(cpu, { action: 'undo_fix', range: { from: 1, to: 1 } })
+    expect(undone[1]).not.toHaveProperty('timingFixMethod')
+  })
+
+  it('splits fixed ranges that used different methods', () => {
+    const two: TimingSegment[] = [...rows.slice(0, 2), { start: 501, end: 503, text: 'cinco seis' }, rows[2]]
+    const a = applyTimingReview(two, { action: 'fix_times', indices: [1], alignment: { starts: [3], ends: [4] }, method: 'model-host-words' })
+    const b = applyTimingReview(a, { action: 'fix_times', indices: [2], alignment: { starts: [4.5], ends: [5] }, method: 'envelope' })
+    expect(fixedRanges(b)).toEqual([{ from: 1, to: 1, method: 'model-host-words' }, { from: 2, to: 2, method: 'envelope' }])
+  })
+
+  it('a fix from before the method was recorded has none', () => {
+    const fixed = applyTimingReview(rows, { action: 'fix_times', indices: [1], alignment: { starts: [3], ends: [4] } })
+    expect(fixedRanges(fixed)).toEqual([{ from: 1, to: 1 }])
+  })
+
+  it('says a range can go to the model host whenever where it belongs is known', () => {
+    const noSpeech = { hasAudio: () => false, spansIn: () => [] }
+    const [finding] = assessTimingEvidence(rows, noSpeech, 600)
+    expect(finding.fix?.ok).toBe(false)
+    expect(finding.fix?.hostEligible).toBe(true)
+  })
+
+  it('never sends a line that holds its own timed turns', () => {
+    const inline: TimingSegment[] = [rows[0], { start: 500, end: 502, text: '[00:03] Speaker 1: hola' }, rows[2]]
+    const evidence = { hasAudio: () => true, spansIn: (a: number, b: number) => [{ start: a, end: b }] }
+    const [finding] = assessTimingEvidence(inline, evidence, 600)
+    expect(finding.fix?.hostEligible).toBe(false)
+  })
+})

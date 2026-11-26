@@ -33,6 +33,8 @@ import { success, error, Result } from '../types/api'
 import { getTranscriptTiming, loadTimingState } from '../services/transcript-timing-store'
 import { applyTimingReview, spliceSection, type TimingReviewRequest } from '../services/transcript-timing-evidence'
 import { alignToSpeech } from '../services/transcript-time-aligner'
+import { fixTimesOnModelHost } from '../services/transcript-host-alignment'
+import { hasInlineTurns } from '../../../src/shared/inline-turns'
 import { renderedTurnCounts } from '../../../src/shared/inline-turns'
 import { transcriptFingerprint } from '../services/transcript-validity-store'
 import { OVERLAP_SECONDS, type TimingSegment } from '../../../src/shared/transcript-timing'
@@ -326,11 +328,23 @@ export function registerTranscriptsHandlers(): void {
       if (action === 'fix_times') {
         if (!finding || finding.kind === 'duplicate') return error('VALIDATION_ERROR', 'Choose a line or section out of order')
         if (finding.windowStart === null || finding.windowEnd === null) return error('VALIDATION_ERROR', finding.fix?.reason ?? 'Where these lines belong is unknown')
-        const spans = state.evidence.spansIn(finding.windowStart, finding.windowEnd)
-        if (!spans) return error('VALIDATION_ERROR', 'This recording has no speech evidence to place the lines on')
-        const alignment = alignToSpeech(finding.lines.map((i) => state.segments[i]), { start: finding.windowStart, end: finding.windowEnd }, spans)
-        if (!alignment.ok) return error('VALIDATION_ERROR', alignment.reason, { lowConfidence: true, confidence: alignment.confidence })
-        review = { action, indices: finding.lines, alignment }
+        const lines = finding.lines.map((i) => state.segments[i])
+        const window = { start: finding.windowStart, end: finding.windowEnd }
+        // The model host first (the owner's choice, 26-nov-2026): Parakeet hears the words in
+        // this window only. Lines holding their own timed turns never go; moving them moves nothing.
+        const host = lines.some((s) => hasInlineTurns(s.text))
+          ? { used: false as const, reason: 'This line holds turns with their own times.' }
+          : await fixTimesOnModelHost({ recordingId, audioPath: state.filePath, lines, window, durationSeconds: state.durationSeconds })
+        if (host.used) {
+          review = { action, indices: finding.lines, alignment: host.alignment, method: 'model-host-words' }
+        } else {
+          console.info(`[TranscriptTiming] Fix times on this computer for ${recordingId}: ${host.reason}`)
+          const spans = state.evidence.spansIn(window.start, window.end)
+          if (!spans) return error('VALIDATION_ERROR', `This recording has no speech evidence to place the lines on. ${host.reason}`, { lowConfidence: true, hostReason: host.reason })
+          const alignment = alignToSpeech(lines, window, spans)
+          if (!alignment.ok) return error('VALIDATION_ERROR', `${alignment.reason} ${host.reason}`, { lowConfidence: true, confidence: alignment.confidence, hostReason: host.reason })
+          review = { action, indices: finding.lines, alignment, method: state.assessment.evidence ?? 'vad' }
+        }
       } else if (action === 'hide' || action === 'show') {
         const chosen = indices ?? finding?.lines
         if (!chosen?.length) return error('VALIDATION_ERROR', 'Choose the lines')

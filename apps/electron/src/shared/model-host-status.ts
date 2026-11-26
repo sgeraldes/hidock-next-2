@@ -26,6 +26,8 @@ export interface ModelHostHealthReport {
   state: 'stopped' | 'ready' | 'paused' | 'busy'
   capabilities: string[]
   diarizationModels?: string[]
+  /** From host 0.6.0: Parakeet word timestamps for Fix times, only where Parakeet passed its spoken test. */
+  alignmentModels?: string[]
   acceleration?: 'cuda' | 'cpu'
   gpu?: { name: string; vramMiB: number | null; driver: string } | null
   reason?: string

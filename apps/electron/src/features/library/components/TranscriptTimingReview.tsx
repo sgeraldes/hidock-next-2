@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
-  OVERLAP_SECONDS, TIMING_CLASSIFICATION_LABELS, TIMING_KIND_LABELS,
+  OVERLAP_SECONDS, TIMING_CLASSIFICATION_LABELS, TIMING_FIX_METHOD_LABELS, TIMING_KIND_LABELS,
   type TimingAssessment, type TimingFinding, type TimingSegment
 } from '@/shared/transcript-timing'
 import type { TranscriptContentUpdate } from './TranscriptViewer'
@@ -120,6 +120,8 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
   }
   if (!findings.length && !hidden.length && !fixed.length && !sections.length) return null
 
+  // The model host hears the words, so it can place lines the sound alone cannot.
+  const hostFix = !!assessment.wordAlignment && current?.kind !== 'duplicate' && current?.fix?.hostEligible === true
   const offerSection = current && current.kind !== 'duplicate' && current.windowStart !== null && current.windowEnd !== null &&
     (current.fix?.offerSection === true || (lowConfidence === current.id && (current.fix?.displacement ?? Infinity) >= OVERLAP_SECONDS))
   return (
@@ -154,7 +156,12 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
               </Button>
               {current.originals && <Button size="sm" variant="ghost" disabled={busy} onClick={() => jump(current.originals![0])}>Go to the first copy</Button>}
             </> : <>
-              {current.fix?.ok && current.fix.firstStart !== null && lowConfidence !== current.id && (
+              {hostFix && lowConfidence !== current.id ? (
+                <Button size="sm" variant="outline" disabled={busy}
+                  onClick={() => act({ action: 'fix_times', findingId: current.id }, current.id)}>
+                  Fix times with Parakeet on the model host
+                </Button>
+              ) : current.fix?.ok && current.fix.firstStart !== null && lowConfidence !== current.id && (
                 <Button size="sm" variant="outline" disabled={busy}
                   onClick={() => act({ action: 'fix_times', findingId: current.id }, current.id)}>
                   Fix times (from {preciseClock(current.fix.firstStart)})
@@ -172,6 +179,12 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
               )}
             </>}
           </div>
+          {hostFix && lowConfidence !== current.id && current.windowStart !== null && current.windowEnd !== null && (
+            <p className="text-muted-foreground">
+              Fix times sends only this stretch of audio ({Math.max(1, Math.round(current.windowEnd - current.windowStart))} s) to the model host, where Parakeet hears the words; the transcript stays here.
+              If the host does not answer, the times come from the speech on this computer.
+            </p>
+          )}
           {current && current.kind !== 'duplicate' && !current.fix?.ok && current.fix?.reason && <p className="text-muted-foreground">{current.fix.reason}</p>}
           {offerSection && confirming === current.id && current.windowStart !== null && current.windowEnd !== null && (
             <div role="alertdialog" aria-label="Transcribe this section again" className="space-y-1 rounded border border-border bg-background px-2 py-1.5" data-testid="section-retranscribe-confirm">
@@ -189,7 +202,7 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
       </>}
       {fixed.map(range => (
         <div key={`fixed-${range.from}`} className="flex flex-wrap items-center gap-2">
-          <span>Times fixed on {lineRange(range.from, range.to)}.</span>
+          <span>Times fixed on {lineRange(range.from, range.to)}{range.method ? `, ${TIMING_FIX_METHOD_LABELS[range.method]}` : ''}.</span>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => jump(range.from)}>Go there</Button>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => act({ action: 'undo_fix', range })}>Undo</Button>
         </div>

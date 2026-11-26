@@ -19,6 +19,7 @@ import { HostSetup } from './host-setup.mjs'
 import { runDiarization, threadEnv } from './diarize.mjs'
 import { runVad } from './vad.mjs'
 import { runAsr } from './asr.mjs'
+import { runAlignment, alignmentModels } from './align.mjs'
 import { NATIVE_DIARIZATION_MODEL, readyNativeDiarization, runNativeDiarization } from './native-diarization.mjs'
 import { readyAsrModels, asrRuntimeFingerprint } from './asr-readiness.mjs'
 import { DecideModels } from './decide.mjs'
@@ -213,6 +214,7 @@ export async function start(options = {}) {
     execute: (audio, options) => {
       const action = () => options.stage === 'vad' ? runVad(audio, options)
         : options.stage === 'transcription' ? runAsr(audio, options)
+        : options.stage === 'alignment' ? runAlignment(audio, { ...options, hostRoot: dirs.root })
         : options.model === NATIVE_DIARIZATION_MODEL ? runNativeDiarization(audio, options) : runDiarization(audio, options)
       return decide ? decide.withAudio(action, options) : action()
     },
@@ -255,6 +257,8 @@ export async function start(options = {}) {
       textGeneration: generationCapability,
       realtimeAsrModels: realtimeAvailable() ? [REALTIME_MODEL] : [],
       asrModels,
+      // Fix times in HiDock: Parakeet's word timestamps, offered only where Parakeet itself is ready.
+      alignmentModels: alignmentModels(asrModels),
       audioChannels: { version: 1, separate: true, maxChannels: 2, activeChannelSelection: true, sourceRolesRequireEvidence: true },
       diarizationModels: [...(setup.canDiarize() ? ['pyannote/speaker-diarization-3.1', 'pyannote/speaker-diarization-community-1'] : []), ...nativeDiarizationModels],
       engines: asrModels.map(model => ({ model, version: config.asrValidation[model].modelVersion,

@@ -47,6 +47,17 @@ beforeEach(() => {
 afterEach(async () => { stopRemoteRecovery(); await vi.advanceTimersByTimeAsync(1500); vi.useRealTimers() })
 
 describe('remote startup observation', () => {
+  it('never resumes a Fix times alignment job as pipeline work', async () => {
+    mocks.list.mockReturnValue([{ ...saved, identity: { ...saved.identity,
+      request: { ...saved.identity.request, model: 'nvidia/parakeet-tdt-0.6b-v3', stage: 'alignment' } } }])
+    const ready = vi.fn()
+    await recoverRemoteJobs(config, ready)
+    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(recoveredRemoteRecordings()).toEqual([])
+    expect(ready).not.toHaveBeenCalled()
+  })
+
   it('does not admit an active local recording and leaves its activity reference intact', async () => {
     mocks.add('recording')
     await recoverRemoteJobs(config, vi.fn())
