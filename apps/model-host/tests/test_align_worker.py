@@ -40,6 +40,11 @@ class WordsFromTokensTests(unittest.TestCase):
     def test_punctuation_only_tokens_never_make_a_word(self):
         self.assertEqual(worker.words_from_tokens([B + ".", B + "?"], [0.1, 0.2], [], offset=0.0, limit=1.0), [])
 
+    def test_tokens_without_timestamps_fail_loudly(self):
+        # A sherpa build that gives no timestamps must not look like silence (Kiro review of #198).
+        with self.assertRaisesRegex(ValueError, "timestamps"):
+            worker.words_from_tokens([B + "hola"], [], [], offset=0.0, limit=1.0)
+
     def test_mismatched_lengths_are_refused(self):
         with self.assertRaises(ValueError):
             worker.words_from_tokens([B + "a", B + "b"], [0.1], [], offset=0.0, limit=1.0)

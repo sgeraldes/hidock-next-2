@@ -34,8 +34,7 @@ import { getTranscriptTiming, loadTimingState } from '../services/transcript-tim
 import { applyTimingReview, spliceSection, type TimingReviewRequest } from '../services/transcript-timing-evidence'
 import { alignToSpeech } from '../services/transcript-time-aligner'
 import { fixTimesOnModelHost } from '../services/transcript-host-alignment'
-import { hasInlineTurns } from '../../../src/shared/inline-turns'
-import { renderedTurnCounts } from '../../../src/shared/inline-turns'
+import { hasInlineTurns, renderedTurnCounts } from '../../../src/shared/inline-turns'
 import { transcriptFingerprint } from '../services/transcript-validity-store'
 import { OVERLAP_SECONDS, type TimingSegment } from '../../../src/shared/transcript-timing'
 import { UUIDSchema } from '../validation/common'
@@ -213,7 +212,9 @@ const ReviewTimingRequestSchema = z.object({
   indices: z.array(z.number().int().min(0).max(50_000)).min(1).max(50_000).optional(),
   range: z.object({ from: z.number().int().min(0).max(50_000), to: z.number().int().min(0).max(50_000) })
     .refine((r) => r.to >= r.from, { message: 'Range end must not precede its start' }).optional(),
-  runId: z.string().min(1).max(100).optional()
+  runId: z.string().min(1).max(100).optional(),
+  // fix_times: the owner pressed "Fix times with Parakeet on the model host".
+  useHost: z.boolean().optional()
 })
 
 /**
@@ -316,7 +317,7 @@ export function registerTranscriptsHandlers(): void {
   ipcMain.handle('transcripts:reviewTiming', async (_, request: unknown): Promise<Result<TimingSaveResult>> => {
     const parsed = ReviewTimingRequestSchema.safeParse(request)
     if (!parsed.success) return error('VALIDATION_ERROR', 'Invalid timing review', parsed.error.format())
-    const { recordingId, fingerprint, action, findingId, indices, range, runId } = parsed.data
+    const { recordingId, fingerprint, action, findingId, indices, range, runId, useHost } = parsed.data
     try {
       if (!isRecordingEligible(recordingId)) return error('RECORDING_INELIGIBLE', 'Recording not available')
       const state = await loadTimingState(recordingId)
@@ -332,7 +333,11 @@ export function registerTranscriptsHandlers(): void {
         const window = { start: finding.windowStart, end: finding.windowEnd }
         // The model host first (the owner's choice, 26-nov-2026): Parakeet hears the words in
         // this window only. Lines holding their own timed turns never go; moving them moves nothing.
-        const host = lines.some((s) => hasInlineTurns(s.text))
+        // Audio leaves this computer only when the owner pressed the model host's button,
+        // which says so (Kiro review of #198).
+        const host = !useHost
+          ? { used: false as const, reason: 'The model host was not asked.' }
+          : lines.some((s) => hasInlineTurns(s.text))
           ? { used: false as const, reason: 'This line holds turns with their own times.' }
           : await fixTimesOnModelHost({ recordingId, audioPath: state.filePath, lines, window, durationSeconds: state.durationSeconds })
         if (host.used) {

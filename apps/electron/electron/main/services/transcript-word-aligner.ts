@@ -35,8 +35,11 @@ export const WORD_ALIGN_MIN_MATCH = 0.5
 export const WORD_ALIGN_NEAR = 0.7
 /** Time given to each transcript word that was not heard, before or after the heard ones in its line. */
 export const WORD_ALIGN_UNHEARD_SECONDS = 0.3
-/** Above this many cells the match would hold the main process too long; the section is refused. */
-export const WORD_ALIGN_MAX_CELLS = 6_000_000
+/**
+ * Above this many cells the match would hold the main process too long; the section is refused.
+ * A 15-minute section (about 2,500 words on each side) fits; it is matched in well under a second.
+ */
+export const WORD_ALIGN_MAX_CELLS = 9_000_000
 
 const COST_NEAR = 0.3
 const COST_SUBSTITUTE = 1
@@ -50,22 +53,31 @@ export function normalizeWords(text: string): string[] {
   return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().match(WORD) ?? []
 }
 
+// Two reused rows: the distance runs for every distinct pair of unequal words, so no allocation per call.
+let rowA = new Uint16Array(64)
+let rowB = new Uint16Array(64)
+
 function editDistance(a: string, b: string): number {
-  let previous = Array.from({ length: b.length + 1 }, (_, j) => j)
+  if (rowA.length <= b.length) { rowA = new Uint16Array(b.length + 1); rowB = new Uint16Array(b.length + 1) }
+  let previous = rowA
+  let current = rowB
+  for (let j = 0; j <= b.length; j++) previous[j] = j
   for (let i = 1; i <= a.length; i++) {
-    const current = [i]
+    current[0] = i
     for (let j = 1; j <= b.length; j++) {
-      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1))
     }
-    previous = current
+    const swap = previous; previous = current; current = swap
   }
   return previous[b.length]
 }
 
 function substitution(a: string, b: string): number {
   if (a === b) return 0
-  if (a.length >= 3 && b.length >= 3 && 1 - editDistance(a, b) / Math.max(a.length, b.length) >= WORD_ALIGN_NEAR) return COST_NEAR
-  return COST_SUBSTITUTE
+  const longest = Math.max(a.length, b.length)
+  // The length difference alone is a lower bound on the distance: most pairs stop here.
+  if (a.length < 3 || b.length < 3 || 1 - Math.abs(a.length - b.length) / longest < WORD_ALIGN_NEAR) return COST_SUBSTITUTE
+  return 1 - editDistance(a, b) / longest >= WORD_ALIGN_NEAR ? COST_NEAR : COST_SUBSTITUTE
 }
 
 export function alignLinesToWords(lines: Array<{ text: string }>, window: SpeechSpan, heardWords: HostWord[]): WordAlignmentResult {
@@ -86,29 +98,47 @@ export function alignLinesToWords(lines: Array<{ text: string }>, window: Speech
   if (!m) return failed('The model host heard no words in this stretch of audio.')
   if ((n + 1) * (m + 1) > WORD_ALIGN_MAX_CELLS) return failed('This section is too long to match word by word in one go.')
 
-  // cost[i][j]: transcript words [0, i) against heard words [0, j). Heard words
-  // before the first match are free (the line before, or padding), and so are
-  // those after the last (the minimum is taken over the whole last row).
+  // Each distinct word gets a number, and the cost of a pair of distinct words is worked out once.
+  const ids = new Map<string, number>()
+  const id = (text: string) => { let value = ids.get(text); if (value === undefined) { value = ids.size; ids.set(text, value) } return value }
+  const tIds = words.map((w) => id(w.text))
+  const hIds = heard.map((w) => id(w.text))
+  const texts = [...ids.keys()]
+  const pairCost = new Map<number, number>()
+  const costOf = (a: number, b: number): number => {
+    if (a === b) return 0
+    const pair = a * texts.length + b
+    let value = pairCost.get(pair)
+    if (value === undefined) { value = substitution(texts[a], texts[b]); pairCost.set(pair, value) }
+    return value
+  }
+
+  // cost[i][j]: transcript words [0, i) against heard words [0, j), kept two rows at a time.
+  // Heard words before the first match are free (the line before, or padding), and so
+  // are those after the last (the minimum is taken over the whole last row).
   const width = m + 1
-  const cost = new Float32Array((n + 1) * width)
   const move = new Uint8Array((n + 1) * width) // 0 diagonal, 1 transcript word unheard, 2 extra heard word
-  for (let i = 1; i <= n; i++) { cost[i * width] = i * COST_UNHEARD; move[i * width] = 1 }
+  let above = new Float32Array(width)
+  let row = new Float32Array(width)
   for (let i = 1; i <= n; i++) {
-    const t = words[i - 1].text
+    const t = tIds[i - 1]
+    row[0] = i * COST_UNHEARD
+    move[i * width] = 1
     for (let j = 1; j <= m; j++) {
-      const diagonal = cost[(i - 1) * width + j - 1] + substitution(t, heard[j - 1].text)
-      const unheard = cost[(i - 1) * width + j] + COST_UNHEARD
-      const extra = cost[i * width + j - 1] + COST_EXTRA
+      const diagonal = above[j - 1] + costOf(t, hIds[j - 1])
+      const unheard = above[j] + COST_UNHEARD
+      const extra = row[j - 1] + COST_EXTRA
       let best = diagonal
       let step = 0
       if (unheard < best) { best = unheard; step = 1 }
       if (extra < best) { best = extra; step = 2 }
-      cost[i * width + j] = best
+      row[j] = best
       move[i * width + j] = step
     }
+    const swap = above; above = row; row = swap
   }
   let j = 0
-  for (let k = 1; k <= m; k++) if (cost[n * width + k] < cost[n * width + j]) j = k
+  for (let k = 1; k <= m; k++) if (above[k] < above[j]) j = k
 
   // Walk back: which heard word each transcript word landed on, and how well.
   const strong = new Array<number>(n).fill(-1)
@@ -117,7 +147,7 @@ export function alignLinesToWords(lines: Array<{ text: string }>, window: Speech
   while (i > 0) {
     const step = j === 0 ? 1 : move[i * width + j]
     if (step === 0) {
-      const c = substitution(words[i - 1].text, heard[j - 1].text)
+      const c = costOf(tIds[i - 1], hIds[j - 1])
       if (c < COST_SUBSTITUTE) strong[i - 1] = j - 1
       else weak[i - 1] = j - 1
       i--; j--
@@ -182,10 +212,15 @@ export function alignLinesToWords(lines: Array<{ text: string }>, window: Speech
   }
 
   const strongLines = raw.filter((r) => r?.strong).length
-  const ok = confidence >= WORD_ALIGN_MIN_MATCH && strongLines >= Math.ceil(lines.length / 2)
+  // Lines pushed past the window's end by the ones before them would all start at its end.
+  const fit = starts.every((s, k) => k === 0 || s >= starts[k - 1] + ALIGN_MIN_STEP_SECONDS - 1e-9)
+  const matchedEnough = confidence >= WORD_ALIGN_MIN_MATCH && strongLines >= Math.ceil(lines.length / 2)
+  const ok = matchedEnough && fit
   return {
     ok, confidence, starts, ends, speechSeconds, wordsPerSpeechSecond: null,
-    reason: ok ? '' : `The model host heard only ${matched} of these ${n} words here, too few to place the lines by them.`,
+    reason: ok ? '' : !matchedEnough
+      ? `The model host heard only ${matched} of these ${n} words here, too few to place the lines by them.`
+      : 'These lines do not fit apart in the time between the lines around them.',
     method: 'model-host-words', matchedWords: matched, totalWords: n, heardWords: m
   }
 }

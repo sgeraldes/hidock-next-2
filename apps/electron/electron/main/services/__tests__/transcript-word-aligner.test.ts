@@ -81,6 +81,27 @@ describe('alignLinesToWords', () => {
     expect(result.reason).toMatch(/no words/i)
   })
 
+  it('matches a 15-minute section (2,500 words each side) without holding the main process (Kiro review of #198)', () => {
+    const vocabulary = Array.from({ length: 600 }, (_, i) => `palabra${i.toString(36)}x${(i * 7919 % 997).toString(36)}`)
+    const said = Array.from({ length: 2500 }, (_, i) => vocabulary[(i * 31) % vocabulary.length])
+    const lines = Array.from({ length: 125 }, (_, k) => ({ text: said.slice(k * 20, k * 20 + 20).join(' ') }))
+    const words = said.map((word, i) => ({ word, start: i * 0.36, end: i * 0.36 + 0.3 }))
+    const started = performance.now()
+    const result = alignLinesToWords(lines, { start: 0, end: 900 }, words)
+    const elapsed = performance.now() - started
+    expect(result.ok).toBe(true)
+    expect(result.starts[60]).toBeCloseTo(1200 * 0.36, 1)
+    expect(elapsed).toBeLessThan(1500)
+  })
+
+  it('refuses instead of stacking lines at the end of the window when they cannot fit (Kiro review of #198)', () => {
+    const words = spoken('uno dos tres cuatro cinco seis', 9.7)
+    const lines = ['uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis'].map((text) => ({ text }))
+    const result = alignLinesToWords(lines, { start: 9.6, end: 10 }, words)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/do not fit/)
+  })
+
   it('refuses a section too large to match in one go instead of stalling the main process', () => {
     const lines = Array.from({ length: 400 }, () => ({ text: 'una dos tres cuatro cinco seis siete ocho nueve diez' }))
     const words = Array.from({ length: 4000 }, (_, i) => ({ word: 'palabra', start: i * 0.2, end: i * 0.2 + 0.1 }))

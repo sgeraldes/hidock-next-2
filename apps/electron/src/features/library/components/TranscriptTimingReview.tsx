@@ -158,7 +158,7 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
             </> : <>
               {hostFix && lowConfidence !== current.id ? (
                 <Button size="sm" variant="outline" disabled={busy}
-                  onClick={() => act({ action: 'fix_times', findingId: current.id }, current.id)}>
+                  onClick={() => act({ action: 'fix_times', findingId: current.id, useHost: true }, current.id)}>
                   Fix times with Parakeet on the model host
                 </Button>
               ) : current.fix?.ok && current.fix.firstStart !== null && lowConfidence !== current.id && (

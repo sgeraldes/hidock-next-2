@@ -763,6 +763,8 @@ export interface ElectronAPI {
     reviewTiming: (request: {
       recordingId: string; fingerprint: string; action: TimingReviewAction
       findingId?: string; indices?: number[]; range?: { from: number; to: number }; runId?: string
+      /** fix_times: send this stretch of audio to the model host's Parakeet first. */
+      useHost?: boolean
     }) => Promise<Result<TimingReviewSaved>>
     /** Sends only that section's audio to the transcription provider; the reader asks first. */
     retranscribeSection: (request: { recordingId: string; fingerprint: string; findingId: string }) => Promise<Result<TimingReviewSaved>>

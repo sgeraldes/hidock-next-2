@@ -56,7 +56,7 @@ describe('alignWordsOnModelHost', () => {
   afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
 
   /** A mocked host: no network, no model. */
-  function host(options: { health?: unknown; status?: string } = {}) {
+  function host(options: { health?: unknown; status?: string; running?: boolean } = {}) {
     const seen: string[] = []
     const id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
@@ -71,7 +71,10 @@ describe('alignWordsOnModelHost', () => {
         expect(body.text).toBeUndefined()
         return json({ id, status: 'awaiting-upload', audioHash })
       }
+      if (path === `/v1/jobs/${id}/cancel`) return json({ id, status: 'cancelled', audioHash })
+      if (path === `/v1/jobs/${id}`) return json({ id, status: 'running', audioHash })
       if (path === `/v1/jobs/${id}/audio`) {
+        if (options.running) return json({ id, status: 'running', audioHash }, 202)
         const status = options.status ?? 'completed'
         return json({ id, status, audioHash, ...(status === 'completed' ? { result, resultHash: createHash('sha256').update(JSON.stringify(result)).digest('hex') } : { error: 'worker crashed' }) }, 202)
       }
@@ -106,6 +109,19 @@ describe('alignWordsOnModelHost', () => {
     const { fetchFn } = host({ status: 'failed' })
     await expect(alignWordsOnModelHost(clip, settings, { timeoutMs: 5000, recordingId: 'rec-1', store: memory() }, fetchFn))
       .rejects.toBeInstanceOf(ModelHostUnavailableError)
+  })
+
+  it('cancels the host job when it takes too long, so the host stops working for nobody (Kiro review of #198)', async () => {
+    const { fetchFn, seen } = host({ running: true })
+    await expect(alignWordsOnModelHost(clip, settings, { timeoutMs: 1200, recordingId: 'rec-1', store: memory() }, fetchFn))
+      .rejects.toBeInstanceOf(ModelHostUnavailableError)
+    expect(seen).toContain('POST /v1/jobs/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb/cancel')
+  })
+
+  it('does not cancel a job the host already ended', async () => {
+    const { fetchFn, seen } = host({ status: 'failed' })
+    await expect(alignWordsOnModelHost(clip, settings, { timeoutMs: 5000, recordingId: 'rec-1', store: memory() }, fetchFn)).rejects.toThrow()
+    expect(seen.some((s) => s.endsWith('/cancel'))).toBe(false)
   })
 
   it('needs an address and a pairing', async () => {

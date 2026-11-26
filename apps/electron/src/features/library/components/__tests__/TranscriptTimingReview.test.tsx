@@ -142,7 +142,7 @@ describe('TranscriptTimingReview: Fix times on the model host', () => {
     render(<Harness />)
     fireEvent.click(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' }))
     expect(screen.getByText(/sends only this stretch of audio \(1 s\) to the model host/)).toBeInTheDocument()
-    await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: hostRun.id }))
+    await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: hostRun.id, useHost: true }))
   })
 
   it('keeps the computer-only button when no model host can place words', async () => {

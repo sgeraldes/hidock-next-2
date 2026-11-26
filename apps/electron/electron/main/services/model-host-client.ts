@@ -503,13 +503,31 @@ export async function alignWordsOnModelHost(
     throw new ModelHostUnavailableError('The model host cannot place words yet: it needs version 0.6.0 and Parakeet prepared.')
   }
   const { runRemoteWorkerJob } = await import('./remote-worker-jobs')
+  // The job id, as the durable client saves it, so a job that ran out of time can be stopped.
+  let jobId: string | undefined
+  const store: typeof options.store = {
+    ...options.store,
+    load: (key) => options.store.load(key),
+    save: (key, identity) => { if (identity.id) jobId = identity.id; options.store.save(key, identity) }
+  }
   try {
     const result = await runRemoteWorkerJob({ path: clipPath, base, token: settings.token, model: ALIGN_MODEL, stage: 'alignment',
       timeoutMs: options.timeoutMs, recordingId: options.recordingId, shouldContinue: options.shouldContinue,
-      store: options.store, fetchFn }) as { words: HostAlignmentAnswer['words']; modelVersion: string }
+      store, fetchFn }) as { words: HostAlignmentAnswer['words']; modelVersion: string }
     return { words: result.words, modelVersion: result.modelVersion }
   } catch (error) {
     invalidateModelHostHealthCache()
-    throw new ModelHostUnavailableError(`The model host could not place the words: ${(error as Error).message}`)
+    const message = (error as Error).message
+    // Nobody will read a timed-out alignment: the identity lives only for this click.
+    // Stop it so the host does not keep Parakeet busy for nothing (Kiro review of #198).
+    if (jobId && /timeout/i.test(message)) {
+      try {
+        await modelHostFetch(`${base}/v1/jobs/${jobId}/cancel`, { method: 'POST', redirect: 'error',
+          headers: { authorization: `Bearer ${settings.token}` }, signal: AbortSignal.timeout(5000) }, fetchFn)
+      } catch (cancelError) {
+        console.warn('[ModelHost] Could not cancel the timed-out alignment job:', (cancelError as Error).message)
+      }
+    }
+    throw new ModelHostUnavailableError(`The model host could not place the words: ${message}`)
   }
 }

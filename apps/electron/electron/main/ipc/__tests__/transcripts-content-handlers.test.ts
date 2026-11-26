@@ -303,17 +303,26 @@ describe('timing review persistence', () => {
   it('fixes times on the words Parakeet heard when the model host answers, and says so on the lines', async () => {
     fixTimesOnModelHost.mockResolvedValue({ used: true, modelVersion: 'parakeet', alignment: { ok: true, starts: [4.9], ends: [5.6], confidence: 1, method: 'model-host-words' } })
     registerTranscriptsHandlers()
-    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0' }) as any
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true }) as any
     expect(result.success).toBe(true)
     expect(fixTimesOnModelHost).toHaveBeenCalledWith(expect.objectContaining({ recordingId: 'rec-1', window: { start: 0, end: 13 },
       lines: [expect.objectContaining({ text: 'opening greeting here' })], durationSeconds: 600, audioPath: 'F:/audio/rec-1.hda' }))
     expect(stored()!.segments[0]).toMatchObject({ start: 4.9, end: 5.6, timingOriginalStart: 494.8, timingFixMethod: 'model-host-words' })
   })
 
+  it('sends no audio to the host unless the owner pressed the host button (Kiro review of #198)', async () => {
+    fixTimesOnModelHost.mockResolvedValue({ used: true, modelVersion: 'parakeet', alignment: { ok: true, starts: [4.9], ends: [5.6], confidence: 1, method: 'model-host-words' } })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(true)
+    expect(fixTimesOnModelHost).not.toHaveBeenCalled()
+    expect(stored()!.segments[0]).toMatchObject({ timingFixMethod: 'vad' })
+  })
+
   it('falls back to the speech stretches when the model host cannot answer, and records that', async () => {
     fixTimesOnModelHost.mockResolvedValue({ used: false, reason: 'The model host did not answer.' })
     registerTranscriptsHandlers()
-    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0' }) as any
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true }) as any
     expect(result.success).toBe(true)
     expect(stored()!.segments[0]).toMatchObject({ timingFixMethod: 'vad' })
     expect(stored()!.segments[0].start).toBeCloseTo(4.86, 2)
@@ -323,7 +332,7 @@ describe('timing review persistence', () => {
     fixTimesOnModelHost.mockResolvedValue({ used: false, reason: 'The model host did not answer.' })
     loadTimingState.mockResolvedValue(await state({ hasAudio: () => false, spansIn: () => [] }))
     registerTranscriptsHandlers()
-    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0' }) as any
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true }) as any
     expect(result.success).toBe(false)
     expect(result.error.message).toMatch(/model host did not answer/)
     expect(result.error.details).toMatchObject({ lowConfidence: true })
@@ -338,7 +347,7 @@ describe('timing review persistence', () => {
     loadTimingState.mockResolvedValue({ transcriptId: 't-1', speakers: JSON.stringify(inline), segments: inline, durationSeconds: 600, evidence, filePath: 'a.hda',
       assessment: { fingerprint: fp, findings: assessTimingEvidence(inline, evidence, 600), hiddenIndices: [], fixedRanges: [], sectionRuns: [], reviewed: false, evidence: 'vad' } })
     registerTranscriptsHandlers()
-    await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint: fp, action: 'fix_times', findingId: 'odd_line:0-0' })
+    await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint: fp, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true })
     expect(fixTimesOnModelHost).not.toHaveBeenCalled()
   })
 
