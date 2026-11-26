@@ -13,7 +13,7 @@ and nothing of the host runs while the machine is being used (design:
 
 ## What it does today
 
-Two capabilities:
+Two capabilities, plus word alignment for Fix times:
 
 - **diarization**, the most expensive thing the client does on CPU;
 - **decisions** with Cloudflare's Clef (27B, loaded in 4-bit) and Clef-Flash
@@ -22,6 +22,19 @@ Two capabilities:
   time HiDock asks for it, at a pinned revision (19 GB and 55 GB), and stays on
   the GPU between requests until 10 minutes pass without one. Design:
   `docs/superpowers/specs/2026-10-04-model-host-clef.md`.
+
+- **word alignment**, from 0.6.0: the `alignment` stage of `/v1/jobs` with model
+  `nvidia/parakeet-tdt-0.6b-v3`. HiDock's Fix times sends only the audio of the
+  stretch where a range of lines belongs (at most 15 minutes plus a second each
+  side), never the transcript. `src/align_worker.py` runs Parakeet TDT through the
+  prepared sherpa-onnx runtime, on the CPU, and returns each word with the time
+  its first token starts and its last one ends; HiDock matches those words to
+  its lines. The stage is advertised (`stages`, `alignmentModels`) only where
+  Parakeet passed its spoken test and its fingerprint still matches.
+  `parakeet_worker.py` is not changed for it: its contents are part of every ASR
+  readiness fingerprint, so editing it would withdraw the engines already prepared.
+  If the host is off, stepped aside or fails, HiDock places the lines on this
+  computer as before.
 
 A host that is off, paused, in use or unreachable does not trigger local model execution by default.
 The client reports the unavailable stage. Local fallback requires the user's explicit setting and retains the

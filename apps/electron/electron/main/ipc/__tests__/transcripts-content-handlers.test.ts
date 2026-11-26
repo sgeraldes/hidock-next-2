@@ -10,6 +10,9 @@ const transcribeRecordingSection = vi.hoisted(() => vi.fn())
 vi.mock('../../services/transcription', () => ({ transcribeRecordingSection, retrySummary: vi.fn() }))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
+// The model host is a mock: no test sends audio anywhere.
+const fixTimesOnModelHost = vi.hoisted(() => vi.fn())
+vi.mock('../../services/transcript-host-alignment', () => ({ fixTimesOnModelHost }))
 
 const db = vi.hoisted(() => ({
   getRecordingById: vi.fn(),
@@ -202,6 +205,15 @@ describe('transcript content editing IPC', () => {
     expect(saved).toEqual(segments)
   })
 
+  it('keeps how Fix times placed a line through a text edit (CodeRabbit review of #198)', async () => {
+    const segments = [{ speaker: 'A', start: 4.9, end: 5.6, text: 'Hola, Manuel', timingOriginalStart: 494.8, timingReviewed: true, timingFixMethod: 'model-host-words' }]
+    db.queryOne.mockReturnValue({ full_text: 'A: Hola Manuel' })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:updateContent')?.({} as never, { recordingId: 'rec-1', expectedFullText: 'A: Hola Manuel', segments }) as any
+    expect(result).toMatchObject({ success: true })
+    expect(JSON.parse(vi.mocked(db.runNoSave).mock.calls[0][1][1] as string)).toEqual(segments)
+  })
+
   it('refuses a save when another editor changed a time since this one loaded', async () => {
     db.queryOne.mockReturnValue({
       full_text: request.expectedFullText,
@@ -253,7 +265,7 @@ describe('timing review persistence', () => {
   async function state(withEvidence = evidence) {
     const { assessTimingEvidence } = await import('../../services/transcript-timing-evidence')
     return {
-      transcriptId: 't-1', speakers, segments, durationSeconds: 600, evidence: withEvidence,
+      transcriptId: 't-1', speakers, segments, durationSeconds: 600, evidence: withEvidence, filePath: 'F:/audio/rec-1.hda',
       assessment: { fingerprint, findings: assessTimingEvidence(segments, withEvidence, 600), hiddenIndices: [], fixedRanges: [], sectionRuns: [], reviewed: false, evidence: 'vad' }
     }
   }
@@ -268,6 +280,7 @@ describe('timing review persistence', () => {
     loadTimingState.mockResolvedValue(await state())
     db.queryOne.mockReturnValue({ id: 't-1', speakers })
     transcribeRecordingSection.mockReset()
+    fixTimesOnModelHost.mockResolvedValue({ used: false, reason: 'This computer is not paired with a model host.' })
   })
 
   it('refuses a stale review without writing', async () => {
@@ -294,6 +307,65 @@ describe('timing review persistence', () => {
     const line = stored()!.segments[0]
     expect(line.start).toBeCloseTo(4.86, 2)
     expect(line).toMatchObject({ timingOriginalStart: 494.8, timingOriginalEnd: 505.7 })
+  })
+
+  it('fixes times on the words Parakeet heard when the model host answers, and says so on the lines', async () => {
+    fixTimesOnModelHost.mockResolvedValue({ used: true, modelVersion: 'parakeet', alignment: { ok: true, starts: [4.9], ends: [5.6], confidence: 1, method: 'model-host-words' } })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true }) as any
+    expect(result.success).toBe(true)
+    expect(fixTimesOnModelHost).toHaveBeenCalledWith(expect.objectContaining({ recordingId: 'rec-1', window: { start: 0, end: 13 },
+      lines: [expect.objectContaining({ text: 'opening greeting here' })], durationSeconds: 600, audioPath: 'F:/audio/rec-1.hda' }))
+    expect(stored()!.segments[0]).toMatchObject({ start: 4.9, end: 5.6, timingOriginalStart: 494.8, timingFixMethod: 'model-host-words' })
+  })
+
+  it('still fixes on this computer when the host attempt itself throws (CodeRabbit review of #198)', async () => {
+    fixTimesOnModelHost.mockRejectedValue(new Error('EPERM: scratch folder'))
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true }) as any
+    expect(result.success).toBe(true)
+    expect(stored()!.segments[0]).toMatchObject({ timingFixMethod: 'vad' })
+  })
+
+  it('sends no audio to the host unless the owner pressed the host button (Kiro review of #198)', async () => {
+    fixTimesOnModelHost.mockResolvedValue({ used: true, modelVersion: 'parakeet', alignment: { ok: true, starts: [4.9], ends: [5.6], confidence: 1, method: 'model-host-words' } })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0' }) as any
+    expect(result.success).toBe(true)
+    expect(fixTimesOnModelHost).not.toHaveBeenCalled()
+    expect(stored()!.segments[0]).toMatchObject({ timingFixMethod: 'vad' })
+  })
+
+  it('falls back to the speech stretches when the model host cannot answer, and records that', async () => {
+    fixTimesOnModelHost.mockResolvedValue({ used: false, reason: 'The model host did not answer.' })
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true }) as any
+    expect(result.success).toBe(true)
+    expect(stored()!.segments[0]).toMatchObject({ timingFixMethod: 'vad' })
+    expect(stored()!.segments[0].start).toBeCloseTo(4.86, 2)
+  })
+
+  it('says why neither the host nor the sound could place the lines', async () => {
+    fixTimesOnModelHost.mockResolvedValue({ used: false, reason: 'The model host did not answer.' })
+    loadTimingState.mockResolvedValue(await state({ hasAudio: () => false, spansIn: () => [] }))
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true }) as any
+    expect(result.success).toBe(false)
+    expect(result.error.message).toMatch(/model host did not answer/)
+    expect(result.error.details).toMatchObject({ lowConfidence: true })
+    expect(db.runNoSave).not.toHaveBeenCalled()
+  })
+
+  it('never sends lines that hold their own timed turns to the model host', async () => {
+    const inline = [{ start: 494.8, end: 505.7, text: '[00:04] Speaker 1: hola' }, segments[1], segments[2]]
+    const { transcriptFingerprint } = await import('../../services/transcript-validity-store')
+    const { assessTimingEvidence } = await import('../../services/transcript-timing-evidence')
+    const fp = transcriptFingerprint(JSON.stringify(inline))
+    loadTimingState.mockResolvedValue({ transcriptId: 't-1', speakers: JSON.stringify(inline), segments: inline, durationSeconds: 600, evidence, filePath: 'a.hda',
+      assessment: { fingerprint: fp, findings: assessTimingEvidence(inline, evidence, 600), hiddenIndices: [], fixedRanges: [], sectionRuns: [], reviewed: false, evidence: 'vad' } })
+    registerTranscriptsHandlers()
+    await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint: fp, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true })
+    expect(fixTimesOnModelHost).not.toHaveBeenCalled()
   })
 
   it('does not apply a fix the sound cannot support, and says so', async () => {

@@ -132,6 +132,8 @@ export interface TimingState {
   speakers: string | null
   segments: TimingSegment[]
   durationSeconds: number | null
+  /** The recording's audio, for Fix times on the model host. */
+  filePath: string | null
   /** The same evidence the findings were judged on, so a fix uses it too. */
   evidence: SpeechEvidence
   assessment: TimingAssessment
@@ -171,6 +173,7 @@ export async function loadTimingState(recordingId: string): Promise<TimingState>
     speakers: row.speakers,
     segments,
     durationSeconds: duration,
+    filePath: row.file_path,
     evidence,
     assessment: {
       fingerprint: transcriptFingerprint(row.speakers),
@@ -184,6 +187,21 @@ export async function loadTimingState(recordingId: string): Promise<TimingState>
   }
 }
 
+/** Whether Fix times can use the model host now; any doubt is no. */
+async function hostCanAlign(): Promise<boolean> {
+  try {
+    const { getConfig } = await import('./config')
+    const config = getConfig().transcription
+    if (!config.modelHostUrl?.trim() || !config.modelHostToken) return false
+    const { checkModelHost, modelHostCanAlign } = await import('./model-host-client')
+    return modelHostCanAlign(await checkModelHost({ url: config.modelHostUrl, token: config.modelHostToken }))
+  } catch (err) {
+    console.warn('[TranscriptTiming] Could not ask the model host whether it can place words:', err instanceof Error ? err.message : err)
+    return false
+  }
+}
+
 export async function getTranscriptTiming(recordingId: string): Promise<TimingAssessment> {
-  return (await loadTimingState(recordingId)).assessment
+  const [state, wordAlignment] = await Promise.all([loadTimingState(recordingId), hostCanAlign()])
+  return { ...state.assessment, wordAlignment }
 }

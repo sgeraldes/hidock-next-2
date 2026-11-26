@@ -6,7 +6,7 @@ import { extname } from 'path'
 
 export interface RemoteJobIdentity {
   key: string; id?: string; restartTerminal?: boolean;
-  request?: { base: string; audioHash: string; bytes?: number; model: string; stage: 'diarization' | 'vad' | 'transcription'; language?: string; recordingId?: string; channelMode?: 'separate'; channelMap?: RemoteAudioChannelMap; activeChannels?: Array<0 | 1>; sourceContext?: RemoteJobSourceContext };
+  request?: { base: string; audioHash: string; bytes?: number; model: string; stage: 'diarization' | 'vad' | 'transcription' | 'alignment'; language?: string; recordingId?: string; channelMode?: 'separate'; channelMap?: RemoteAudioChannelMap; activeChannels?: Array<0 | 1>; sourceContext?: RemoteJobSourceContext };
   observedStatus?: string
 }
 export interface RemoteJobSourceContext {
@@ -30,7 +30,7 @@ export type RemoteAudioChannelMap = Array<{ sourceChannel: 0 | 1; role: 'unknown
 
 /** Shared key for normal jobs and verified imports of an already-created job. */
 export function remoteWorkerRequestKey(input: {
-  base: string; audioHash: string; model: string; stage: 'diarization' | 'vad' | 'transcription';
+  base: string; audioHash: string; model: string; stage: 'diarization' | 'vad' | 'transcription' | 'alignment';
   language?: string; channelMode?: 'separate'; channelMap?: RemoteAudioChannelMap; activeChannels?: Array<0 | 1>
 }): string {
   const base = input.base.replace(/\/+$/, '')
@@ -44,7 +44,7 @@ export function remoteWorkerRequestKey(input: {
 /** No local fallback or duplicate execution after an uncertain network outcome. */
 export async function runRemoteWorkerJob(input: {
   path: string; base: string; token: string; model: string; timeoutMs: number;
-  stage?: 'diarization' | 'vad' | 'transcription'; language?: string; recordingId?: string;
+  stage?: 'diarization' | 'vad' | 'transcription' | 'alignment'; language?: string; recordingId?: string;
   channelMode?: 'separate'; channelMap?: RemoteAudioChannelMap; activeChannels?: Array<0 | 1>;
   shouldContinue?: () => boolean; store: RemoteJobStore; fetchFn?: typeof fetch
 }): Promise<unknown> {
@@ -237,8 +237,11 @@ export function validateRemoteResult(result: Record<string, unknown>, stage: str
       throw new Error('Remote worker returned inconsistent unavailable diarization metadata; automatic retry disabled')
     }
   }
+  const words = result.words
   const validStage = stage === 'diarization'
     ? Array.isArray(result.speakers) && Array.isArray(result.segments)
+    : stage === 'alignment' ? Array.isArray(words) && words.every((w) => w && typeof w.word === 'string' &&
+      Number.isFinite(w.start) && Number.isFinite(w.end) && w.start >= 0 && w.end >= w.start)
     : stage === 'transcription' ? typeof result.text === 'string' && Array.isArray(result.segments) &&
       result.segments.every(s => s && typeof s.text === 'string' && typeof s.speaker === 'string' &&
     Number.isFinite(s.start) && Number.isFinite(s.end) && s.start >= 0 && s.end > s.start)

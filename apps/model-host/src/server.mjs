@@ -1,4 +1,5 @@
 import { ASR_MODELS } from './asr.mjs'
+import { ALIGN_MODEL } from './align.mjs'
 import { attachRealtimeGateway } from './realtime-gateway.mjs'
 import { validateSemanticRequest, SEMANTIC_MODEL } from './semantic-embeddings.mjs'
 /**
@@ -181,10 +182,12 @@ export function createHandler(deps) {
           sendJson(res, 200, { protocolVersion: 1, version: VERSION, ...capabilities,
             stages: [...(capabilities.capabilities.includes('diarize') || capabilities.diarizationModels?.length ? ['diarization'] : []),
               ...(capabilities.capabilities.includes('vad') ? ['vad'] : []),
-              ...((capabilities.asrModels || []).length ? ['transcription'] : [])],
+              ...((capabilities.asrModels || []).length ? ['transcription'] : []),
+              ...((capabilities.alignmentModels || []).length ? ['alignment'] : [])],
             models: [...(capabilities.diarizationModels ?? (capabilities.capabilities.includes('diarize') ? [...PINNABLE_MODELS] : [])),
               ...(capabilities.capabilities.includes('vad') ? ['energy-vad-safety-v1'] : []),
               ...(capabilities.asrModels || []).filter(model => ASR_MODELS.has(model))],
+            alignmentModels: capabilities.alignmentModels || [],
             defaultAsrModel: capabilities.asrModels?.[0] || null,
             retention: { audio: 'until job ends', resultSeconds: 86400 } }); return
         }
@@ -263,8 +266,10 @@ export function createHandler(deps) {
           const vad = request.stage === 'vad' && request.model === 'energy-vad-safety-v1'
           const diarization = request.stage === 'diarization' && (pinnedModel(request.model) || request.model === NATIVE_DIARIZATION_MODEL)
           const asr = request.stage === 'transcription' && ASR_MODELS.has(request.model)
-          if (!vad && !diarization && !asr) { sendJson(res, 400, { error: 'Unsupported stage/model' }); return }
-          if (request.model === NATIVE_DIARIZATION_MODEL ? !deps.capabilities().diarizationModels?.includes(request.model) : asr ? !deps.capabilities().asrModels?.includes(request.model) :
+          const alignment = request.stage === 'alignment' && request.model === ALIGN_MODEL
+          if (!vad && !diarization && !asr && !alignment) { sendJson(res, 400, { error: 'Unsupported stage/model' }); return }
+          if (alignment ? !deps.capabilities().alignmentModels?.includes(request.model) :
+              request.model === NATIVE_DIARIZATION_MODEL ? !deps.capabilities().diarizationModels?.includes(request.model) : asr ? !deps.capabilities().asrModels?.includes(request.model) :
               !deps.capabilities().capabilities.includes(vad ? 'vad' : 'diarize')) {
             sendJson(res, 503, { error: 'The requested model runtime is not ready' }); return
           }

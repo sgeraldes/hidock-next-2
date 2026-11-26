@@ -75,7 +75,7 @@ export class WorkerJobs {
     if (!/^[a-f0-9]{64}$/.test(request.audioHash || '') ||
         !/^[a-zA-Z0-9_-]{16,128}$/.test(request.idempotencyKey || '') ||
         !Number.isSafeInteger(request.bytes) || request.bytes < 1 || request.bytes > this.maxBytes ||
-        !['diarization', 'vad', 'transcription'].includes(request.stage) || !/^\.[a-z0-9]{1,8}$/i.test(request.extension || '')) {
+        !['diarization', 'vad', 'transcription', 'alignment'].includes(request.stage) || !/^\.[a-z0-9]{1,8}$/i.test(request.extension || '')) {
       throw fail(400, 'Invalid job request')
     }
     if (request.language !== undefined && !/^(?:[a-z]{2,3}|auto)$/.test(request.language)) throw fail(400, 'Invalid language')
@@ -142,7 +142,7 @@ export class WorkerJobs {
         { signal: controller.signal })
       if (bytes !== job.bytes || hash.digest('hex') !== job.audioHash) throw fail(422, 'Audio hash or size mismatch')
       await this.update(job, { status: 'running', receivedBytes: bytes })
-      this.telemetry?.phase(telemetryId, job.stage === 'vad' ? 'detecting audio activity' : job.stage === 'transcription' ? 'loading / transcribing' : 'loading / diarizing')
+      this.telemetry?.phase(telemetryId, job.stage === 'vad' ? 'detecting audio activity' : job.stage === 'transcription' ? 'loading / transcribing' : job.stage === 'alignment' ? 'loading / aligning words' : 'loading / diarizing')
       accepted = true
       // Disconnecting the desktop does not cancel an accepted job. Cancel has its own authenticated route.
       void this.run(job, audioPath, controller).catch(error => console.error('[Jobs] Could not persist terminal state:', error.message))

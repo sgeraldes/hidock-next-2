@@ -1,7 +1,7 @@
 import { duplicateGroups, timingOutlierIndices, timingRanges, type TimedLine } from '../../../src/shared/transcript-line-issues'
 import { OVERLAP_SECONDS } from '../../../src/shared/transcript-timing'
 import type {
-  TimingFinding, TimingFixedRange, TimingReviewAction, TimingSectionRun, TimingSegment
+  TimingFinding, TimingFixedRange, TimingFixMethod, TimingReviewAction, TimingSectionRun, TimingSegment
 } from '../../../src/shared/transcript-timing'
 import { alignToSpeech, type AlignmentResult, type SpeechSpan } from './transcript-time-aligner'
 import { hasInlineTurns } from '../../../src/shared/inline-turns'
@@ -87,12 +87,14 @@ export function assessTimingEvidence(
           reason: overlap && !alignment.ok
             ? `${range.kind === 'odd_line' ? 'It starts' : 'They start'} ${displacement.toFixed(1)} s from where the lines around ${range.kind === 'odd_line' ? 'it' : 'them'} say, as when two people speak at once. Nothing needs fixing unless it sounds wrong.`
             : alignment.reason,
-          offerSection: !alignment.ok && !overlap, displacement }
-      : { ok: false, confidence: 0, firstStart: null, offerSection: false, displacement,
+          offerSection: !alignment.ok && !overlap, displacement, hostEligible: true }
+      : { ok: false, confidence: 0, firstStart: null, offerSection: false, displacement, hostEligible: window !== null,
           reason: window ? 'This recording has no speech evidence to place the lines on.' : 'No ordered line follows this range, so where it belongs is unknown.' }
     // A legacy line holding "[MM:SS] Speaker N:" turns shows them at their own
     // times, which moving the line does not change (CodeRabbit review of #195).
-    if (fix.ok && flagged.some((s) => hasInlineTurns(s.text))) {
+    const inlineTurns = flagged.some((s) => hasInlineTurns(s.text))
+    if (inlineTurns) fix.hostEligible = false
+    if (fix.ok && inlineTurns) {
       Object.assign(fix, {
         ok: false, firstStart: null, offerSection: !overlap,
         reason: 'This line holds turns with their own times, so moving the line would not move them.'
@@ -138,18 +140,16 @@ export function assessTimingEvidence(
   return findings.sort((a, b) => a.from - b.from)
 }
 
-function groupConsecutive(indices: number[]): TimingFixedRange[] {
-  const ranges: TimingFixedRange[] = []
-  for (const index of indices) {
-    const last = ranges[ranges.length - 1]
-    if (last && index === last.to + 1) last.to = index
-    else ranges.push({ from: index, to: index })
-  }
-  return ranges
-}
-
+/** Consecutive fixed lines, split where the method that placed them changes. */
 export function fixedRanges(segments: TimingSegment[]): TimingFixedRange[] {
-  return groupConsecutive(segments.flatMap((s, i) => s.timingOriginalStart !== undefined ? [i] : []))
+  const ranges: TimingFixedRange[] = []
+  segments.forEach((s, index) => {
+    if (s.timingOriginalStart === undefined) return
+    const last = ranges[ranges.length - 1]
+    if (last && index === last.to + 1 && last.method === s.timingFixMethod) last.to = index
+    else ranges.push({ from: index, to: index, ...(s.timingFixMethod ? { method: s.timingFixMethod } : {}) })
+  })
+  return ranges
 }
 
 /** Section transcriptions that can be undone now: not replaced by a later one. */
@@ -168,6 +168,8 @@ export function sectionRuns(segments: TimingSegment[]): TimingSectionRun[] {
 
 export interface TimingReviewRequest {
   action: TimingReviewAction
+  /** fix_times: how the alignment was made, kept on the fixed lines. */
+  method?: TimingFixMethod
   /** hide/show: the lines. fix_times: the finding's lines, in order. */
   indices?: number[]
   /** fix_times: the aligner's result for those lines. undo_fix: the range. */
@@ -204,6 +206,8 @@ export function applyTimingReview(segments: TimingSegment[], request: TimingRevi
           ...(first && line.end !== undefined ? { timingOriginalEnd: line.end } : {}),
           timingReviewed: true
         }
+        if (request.method) copy[i].timingFixMethod = request.method
+        else delete copy[i].timingFixMethod
       })
       return copy
     }
@@ -214,7 +218,7 @@ export function applyTimingReview(segments: TimingSegment[], request: TimingRevi
       for (let i = range.from; i <= range.to; i++) {
         const line = copy[i]
         if (!line || line.timingOriginalStart === undefined) continue
-        const { timingOriginalStart, timingOriginalEnd, ...rest } = line
+        const { timingOriginalStart, timingOriginalEnd, timingFixMethod: _method, ...rest } = line
         copy[i] = { ...rest, start: timingOriginalStart, ...(timingOriginalEnd !== undefined ? { end: timingOriginalEnd } : {}), timingReviewed: true }
         if (timingOriginalEnd === undefined) delete copy[i].end
         restored++

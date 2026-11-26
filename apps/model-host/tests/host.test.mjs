@@ -558,8 +558,11 @@ describe('diarization worker', () => {
   it('stops the worker when the job is cancelled, and still cleans up', async () => {
     const killed = []
     let written = ''
+    let spawned
+    const started = new Promise((resolve) => { spawned = resolve })
     const spawnFn = (_python, args) => {
       written = args[args.indexOf('--audio') + 1]
+      spawned()
       const child = new EventEmitter()
       child.stdout = new EventEmitter()
       child.stdout.setEncoding = () => {}
@@ -573,7 +576,9 @@ describe('diarization worker', () => {
       pythonPath: 'py', workerPath: 'w.py', model: 'm', fallbackModel: 'f',
       minSpeechSeconds: 1, cpuPercent: 50, timeoutMs: 60000, spawnFn, signal: controller.signal,
     })
-    await new Promise((r) => setTimeout(r, 10))
+    // Cancel once the worker runs: a fixed 10 ms wait raced the temp write on a slow CI runner,
+    // which cancelled before the spawn and so killed nothing (CI on #198).
+    await started
     controller.abort()
     await expect(promise).rejects.toThrow(/cancelled/)
     expect(killed).toEqual([true])

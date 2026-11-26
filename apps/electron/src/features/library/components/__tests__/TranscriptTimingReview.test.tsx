@@ -132,3 +132,69 @@ describe('TranscriptTimingReview: the warning at the top of the transcript', () 
     expect(onUpdated).not.toHaveBeenCalled()
   })
 })
+
+describe('TranscriptTimingReview: Fix times on the model host', () => {
+  const hostRun: TimingFinding = { ...run, fix: { ...run.fix!, hostEligible: true } }
+
+  it('offers Fix times through the model host even where the sound alone cannot place the lines, and says what is sent', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [hostRun], wordAlignment: true }) })
+    reviewTiming.mockResolvedValue({ success: true, data: { fullText: 'x', segments: [], wordCount: 1 } })
+    render(<Harness />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' }))
+    expect(screen.getByText(/sends only this stretch of audio, about 3 s with a second on each side, to the model host/)).toBeInTheDocument()
+    await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: hostRun.id, useHost: true }))
+  })
+
+  it('keeps the computer-only fix as its own choice when the host can align too (CodeRabbit review of #198)', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [{ ...odd, fix: { ...odd.fix!, hostEligible: true } }], wordAlignment: true }) })
+    reviewTiming.mockResolvedValue({ success: true, data: { fullText: 'x', segments: [], wordCount: 1 } })
+    render(<Harness />)
+    expect(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Fix times (from 0:04.9)' }))
+    await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: odd.id }))
+  })
+
+  it('keeps the untried host button after the computer-only fix refuses (CodeRabbit review of #198)', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [{ ...odd, fix: { ...odd.fix!, hostEligible: true } }], wordAlignment: true }) })
+    reviewTiming.mockResolvedValue({ success: false, error: { message: 'The words and the speech do not match.', details: { lowConfidence: true } } })
+    render(<Harness />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix times (from 0:04.9)' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('do not match')
+    expect(screen.queryByRole('button', { name: 'Fix times (from 0:04.9)' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Fix times with Parakeet on the model host' })).toBeInTheDocument()
+  })
+
+  it('hides both fixes once the host path refused too, and offers the section instead', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [{ ...odd, fix: { ...odd.fix!, hostEligible: true } }], wordAlignment: true }) })
+    reviewTiming.mockResolvedValue({ success: false, error: { message: 'Heard only 0 of these 3 words.', details: { lowConfidence: true } } })
+    render(<Harness />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Heard only 0')
+    expect(screen.queryByRole('button', { name: /Fix times/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Transcribe this section again' })).toBeInTheDocument()
+  })
+
+  it('keeps the computer-only button when no model host can place words', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [hostRun], wordAlignment: false }) })
+    render(<Harness />)
+    await screen.findByText('One timing problem')
+    expect(screen.queryByRole('button', { name: /Fix times/ })).not.toBeInTheDocument()
+  })
+
+  it('never offers the model host for lines that hold their own timed turns', async () => {
+    const inline: TimingFinding = { ...run, fix: { ...run.fix!, hostEligible: false } }
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [inline], wordAlignment: true }) })
+    render(<Harness />)
+    await screen.findByText('One timing problem')
+    expect(screen.queryByRole('button', { name: /Fix times/ })).not.toBeInTheDocument()
+  })
+
+  it('says which method placed each fixed range', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [], fixedRanges: [
+      { from: 0, to: 1, method: 'model-host-words' }, { from: 5, to: 5, method: 'vad' }, { from: 9, to: 9 }] }) })
+    render(<Harness />)
+    expect(await screen.findByText('Times fixed on lines 1 to 2, from the words Parakeet heard on the model host.')).toBeInTheDocument()
+    expect(screen.getByText('Times fixed on line 6, from the speech stretches on this computer.')).toBeInTheDocument()
+    expect(screen.getByText('Times fixed on line 10.')).toBeInTheDocument()
+  })
+})

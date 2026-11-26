@@ -467,3 +467,67 @@ export async function diarizeOnModelHost(
     if (watch) clearInterval(watch)
   }
 }
+
+/** Parakeet TDT on the host: its word timestamps put Fix times' lines on the words actually heard. */
+export const ALIGN_MODEL = 'nvidia/parakeet-tdt-0.6b-v3'
+
+/** A paired durable host that offers word alignment (host 0.6.0 with Parakeet prepared). */
+export function modelHostCanAlign(health: ModelHostHealth | null): boolean {
+  return health?.protocolVersion === 1 && Array.isArray(health.alignmentModels) && health.alignmentModels.includes(ALIGN_MODEL)
+}
+
+export interface HostAlignmentAnswer {
+  words: Array<{ word: string; start: number; end: number }>
+  modelVersion: string
+}
+
+/**
+ * Send one short section of audio (never the transcript) to the host and get
+ * back when each word Parakeet heard starts and ends, on the section's clock.
+ * Every way the host can fail to answer becomes ModelHostUnavailableError, so
+ * Fix times falls back to the speech-stretch aligner on this machine.
+ */
+export async function alignWordsOnModelHost(
+  clipPath: string,
+  settings: ModelHostSettings,
+  options: { timeoutMs: number; recordingId: string; shouldContinue?: () => boolean; store: import('./remote-worker-jobs').RemoteJobStore },
+  fetchFn: typeof fetch = fetch
+): Promise<HostAlignmentAnswer> {
+  let base: string
+  try { base = normalizeBase(settings.url) } catch (error) { throw new ModelHostUnavailableError((error as Error).message) }
+  if (!base) throw new ModelHostUnavailableError('No model host is configured.')
+  if (!settings.token) throw new ModelHostUnavailableError('This machine is not paired with the model host.')
+  const health = await checkModelHost(settings, fetchFn)
+  if (!health) throw new ModelHostUnavailableError('The model host did not answer.')
+  if (!modelHostCanAlign(health)) {
+    throw new ModelHostUnavailableError('The model host cannot place words yet: it needs version 0.6.0 and Parakeet prepared.')
+  }
+  const { runRemoteWorkerJob } = await import('./remote-worker-jobs')
+  // The job id, as the durable client saves it, so a job that ran out of time can be stopped.
+  let jobId: string | undefined
+  const store: typeof options.store = {
+    ...options.store,
+    load: (key) => options.store.load(key),
+    save: (key, identity) => { if (identity.id) jobId = identity.id; options.store.save(key, identity) }
+  }
+  try {
+    const result = await runRemoteWorkerJob({ path: clipPath, base, token: settings.token, model: ALIGN_MODEL, stage: 'alignment',
+      timeoutMs: options.timeoutMs, recordingId: options.recordingId, shouldContinue: options.shouldContinue,
+      store, fetchFn }) as { words: HostAlignmentAnswer['words']; modelVersion: string }
+    return { words: result.words, modelVersion: result.modelVersion }
+  } catch (error) {
+    invalidateModelHostHealthCache()
+    const message = (error as Error).message
+    // Nobody will read a timed-out alignment: the identity lives only for this click.
+    // Stop it so the host does not keep Parakeet busy for nothing (Kiro review of #198).
+    if (jobId && /timeout/i.test(message)) {
+      try {
+        await modelHostFetch(`${base}/v1/jobs/${jobId}/cancel`, { method: 'POST', redirect: 'error',
+          headers: { authorization: `Bearer ${settings.token}` }, signal: AbortSignal.timeout(5000) }, fetchFn)
+      } catch (cancelError) {
+        console.warn('[ModelHost] Could not cancel the timed-out alignment job:', (cancelError as Error).message)
+      }
+    }
+    throw new ModelHostUnavailableError(`The model host could not place the words: ${message}`)
+  }
+}
