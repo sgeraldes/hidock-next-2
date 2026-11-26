@@ -333,6 +333,19 @@ vi.mock('../vector-store', () => ({
   getVectorStore: (...args: any[]) => mockGetVectorStore(...args)
 }))
 
+// The indexing stage asks which embeddings provider is active, only to label the
+// run. Unmocked, that is the real brain router probing Ollama and the Model Host
+// over the network: on 26-nov the probe never returned, the vibevoice run never
+// finished, its "processing" flag leaked into the next tests, and the no-key test
+// saw a busy queue and failed. The vector store is mocked, so nothing here needs
+// a real provider.
+vi.mock('../embeddings', () => ({
+  getEmbeddingsService: () => ({
+    activeProviderId: async () => null,
+    generateEmbeddings: async (texts: string[]) => texts.map(() => null)
+  })
+}))
+
 vi.mock('child_process', () => ({
   execFile: (...args: any[]) => mockExecFile(...args),
   // spawnStreaming calls spawn() — delegate to mockExecFile so tests can intercept
@@ -2093,6 +2106,8 @@ vi.mock('../provider-checkpoints', () => ({
 it('warns once per session and leaves the queue paused when Gemini has no key', async () => {
   mockConfig.transcription.provider = 'gemini'
   mockConfig.transcription.geminiApiKey = ''
+  // Its own empty queue: run alone, it used to read whatever an earlier test left.
+  mockGetQueueItems.mockReturnValue([])
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
   const { processQueueManually, getQueueState } = await import('../transcription')
