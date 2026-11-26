@@ -35,8 +35,11 @@ import {
   commitRecordingSplit,
   setGraphProvenanceCleanup,
   getDatabase,
+  restoreRecording,
+  clearPurgeTombstones,
 } from '../database'
 import { getTableColumns } from '@hidock/database'
+import Database from 'better-sqlite3'
 
 const getTableColumnsForTest = (table: string): string[] => getTableColumns(getDatabase(), table)
 
@@ -136,6 +139,36 @@ describe('v74 schema', () => {
     expect(() =>
       run("INSERT INTO deletion_journal (id, recording_id, mode, requested_origin) VALUES ('x', 'r', 'soft', 'agent')")
     ).toThrow(/CHECK/)
+  })
+})
+
+// The library runs WAL with synchronous NORMAL: a power cut can lose the last
+// commits. Deletions, their journal and the purge tombstones commit synced.
+describe('deletion writes are synced to disk', () => {
+  function syncCalls(work: () => void): string[] {
+    const pragma = vi.spyOn(Database.prototype, 'pragma')
+    try {
+      work()
+      return pragma.mock.calls.map(([source]) => String(source)).filter((s) => /^(synchronous\s*=|wal_checkpoint)/.test(s))
+    } finally { pragma.mockRestore() }
+  }
+
+  it('a soft delete, its restore and a hard purge each commit with synchronous FULL, then NORMAL again', () => {
+    seedRecording('rec-sync')
+    const declared = ['synchronous = FULL', 'synchronous = NORMAL']
+    expect(syncCalls(() => deleteRecordingCascade('rec-sync', { hard: false, origin: 'user', requestedBy: 'test:soft' }))).toEqual(declared)
+    expect(syncCalls(() => expect(restoreRecording('rec-sync')).toBe(true))).toEqual(declared)
+    expect(syncCalls(() => deleteRecordingCascade('rec-sync', { hard: true, origin: 'user', requestedBy: 'test:hard' }))).toEqual(declared)
+    expect(queryOne('PRAGMA synchronous')).toEqual({ synchronous: 1 })
+  })
+
+  it('an autocommit write to the purge ledger is synced too', () => {
+    run("INSERT INTO purged_files (filename) VALUES ('gone.hda')")
+    expect(syncCalls(() => clearPurgeTombstones('gone.hda'))).toEqual(['synchronous = FULL', 'synchronous = NORMAL'])
+  })
+
+  it('other writes stay at NORMAL', () => {
+    expect(syncCalls(() => seedRecording('rec-plain'))).toEqual([])
   })
 })
 

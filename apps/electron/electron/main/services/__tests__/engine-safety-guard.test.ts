@@ -39,10 +39,10 @@ function removeDbFiles(): void {
 }
 
 describe('checkEngineSafety', () => {
-  it('requires the engine whose snapshot survives a deep data folder (v3)', async () => {
+  it('requires the engine that syncs deletion writes (v4)', async () => {
     const { REQUIRED_ENGINE_SAFETY_VERSION } = await import('../engine-safety-guard')
     const { ENGINE_SAFETY_VERSION } = await vi.importActual<typeof import('@hidock/database')>('@hidock/database')
-    expect(REQUIRED_ENGINE_SAFETY_VERSION).toBe(3)
+    expect(REQUIRED_ENGINE_SAFETY_VERSION).toBe(4)
     expect(ENGINE_SAFETY_VERSION).toBeGreaterThanOrEqual(REQUIRED_ENGINE_SAFETY_VERSION)
   })
 

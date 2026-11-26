@@ -12,6 +12,7 @@ Device reference: [model/version gates, recordings and native markers](../../doc
 - A recording on this PC shows a red dot, the elapsed time and Stop. A live session from the HiDock shows the same, named Live transcription or Live audio.
 - When nothing plays, the header offers Record: Record on this PC starts at once; Live transcription from the HiDock opens the Device page at its live controls, and says to connect the HiDock first when it is not connected. Record stays next to a playback when there is room for both. A recording that a find result only loaded, without playing it, does not take over the header.
 - The media area steps aside by the room it really has: first the title, then the position bar, the times and Open. Play or Pause, Stop and a recording's time and Stop always stay, and the search and the window buttons are never covered.
+- Moving a recording to the Trash, restoring it, deleting it for good and splitting it are now written to disk before the app goes on. Other saves can lose their last few seconds on a power cut, as before; the database file itself is never damaged by it.
 
 ## 2026-11-25 | Transcript times that are wrong, shown and fixed
 
