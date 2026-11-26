@@ -35,17 +35,3 @@ export type {
   DatabaseBackupExecutorOptions,
   DatabaseBackupExecutor,
 } from './engine.js'
-export {
-  createWorkerThreadWalCheckpointer,
-  runWalCheckpointWorker,
-  DEFAULT_WAL_CHECKPOINT_TUNING,
-} from './wal-checkpointer.js'
-export type {
-  WalCheckpointer,
-  WalCheckpointerEvents,
-  WalCheckpointerFactory,
-  WalCheckpointResult,
-  WalCheckpointTuning,
-  WalCheckpointWorkerMessage,
-  WorkerThreadWalCheckpointerOptions,
-} from './wal-checkpointer.js'

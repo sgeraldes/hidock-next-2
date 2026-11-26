@@ -47,7 +47,6 @@ import { closeSync, existsSync, fsyncSync, linkSync, openSync, renameSync, rmSyn
 import { promises as fsPromises } from 'fs'
 import { dirname, basename, join, toNamespacedPath } from 'path'
 import { randomUUID } from 'crypto'
-import type { WalCheckpointer, WalCheckpointerFactory } from './wal-checkpointer.js'
 
 /* -------------------------------------------------------------------------- */
 /*  better-sqlite3 minimal structural types (kept independent of the exact    */
@@ -196,16 +195,14 @@ export class MassDeleteError extends Error {
  * on anything else.
  */
 export class SchemaBehindError extends Error {
-  readonly onDisk: number
-  readonly needed: number
-
-  constructor(onDisk: number, needed: number) {
+  constructor(
+    readonly onDisk: number,
+    readonly needed: number
+  ) {
     super(
       `The database is on schema v${onDisk} and this code needs v${needed}. ` +
         'Open the app once so it can upgrade the file; a read-only reader cannot.'
     )
-    this.onDisk = onDisk
-    this.needed = needed
     this.name = 'SchemaBehindError'
   }
 }
@@ -351,12 +348,11 @@ class SqlJsCompatStatement implements SqlJsCompatStatementApi {
   private cols: string[] | null = null
   private idx = 0
   private readonly reader: boolean
-  private readonly stmt: BetterSqlite3Statement
-  private readonly onWrite: (changes: number) => void
 
-  constructor(stmt: BetterSqlite3Statement, onWrite: (changes: number) => void) {
-    this.stmt = stmt
-    this.onWrite = onWrite
+  constructor(
+    private readonly stmt: BetterSqlite3Statement,
+    private readonly onWrite: (changes: number) => void
+  ) {
     this.reader = stmt.reader
   }
 
@@ -443,17 +439,11 @@ class SqlJsCompatStatement implements SqlJsCompatStatementApi {
 /* -------------------------------------------------------------------------- */
 
 class SqlJsCompatDatabase implements SqlJsCompatDatabaseApi {
-  private readonly bdb: BetterSqlite3Database
-  private readonly onWrite: (changes: number) => void
-  private readonly rowsModified: () => number
-
-  // Plain fields, not parameter properties: Node loads this file with type
-  // stripping only in the crash test's child process.
-  constructor(bdb: BetterSqlite3Database, onWrite: (changes: number) => void, rowsModified: () => number) {
-    this.bdb = bdb
-    this.onWrite = onWrite
-    this.rowsModified = rowsModified
-  }
+  constructor(
+    private readonly bdb: BetterSqlite3Database,
+    private readonly onWrite: (changes: number) => void,
+    private readonly rowsModified: () => number
+  ) {}
 
   run(sql: string, params?: unknown): void {
     const norm = normalizeParams(params)
@@ -616,32 +606,6 @@ export interface DatabaseEngineConfig {
    * row. Called when a migration run ends. Omit it and the column stays NULL.
    */
   appVersion?: () => string | null | undefined
-  /**
-   * Host-built WAL checkpointer (a worker thread with its own connection).
-   * When it reports ready, the worker runs PASSIVE checkpoints every 100 ms
-   * while writes arrive, so copying and syncing the WAL happens off the
-   * caller's thread; this connection's automatic checkpoint becomes the
-   * backstop ({@link walBackstopPages}) and has little or nothing left to do
-   * when it fires. saveDatabase() then asks the worker instead of
-   * checkpointing here. If the worker fails, SQLite's automatic checkpoint is
-   * all there is again, as without one. Read-only connections never use it.
-   */
-  walCheckpointer?: WalCheckpointerFactory
-  /**
-   * While the worker checkpoints, the WAL file is cut back to this size each
-   * time it starts over (PRAGMA journal_size_limit), so one large burst does
-   * not leave a large file behind. Default 64 MiB.
-   */
-  walJournalSizeLimitBytes?: number
-  /**
-   * While the worker checkpoints, the app connection's automatic checkpoint
-   * stays on at this many WAL pages (default 1000, SQLite's own). It is the
-   * backstop that keeps the WAL bounded: under commits that never pause, the
-   * worker's copy always ends a few commits behind and the WAL cannot start
-   * over, so the commit that crosses this size copies what is left here.
-   * When commits pause, the worker catches up and the WAL starts over first.
-   */
-  walBackstopPages?: number
   /** @deprecated no-op — better-sqlite3 writes incrementally (WAL). */
   saveDebounceMs?: number
   /** @deprecated no-op — better-sqlite3 writes incrementally (WAL). */
@@ -665,19 +629,8 @@ const BYTES_PER_MB = 1024 * 1024
  *  2. Every migration run writes a schema_migration_audit row.
  *  3. The snapshot and its partial copy use short, namespaced paths, so a data
  *     folder close to MAX_PATH still gets a verified snapshot.
- *  4. WAL checkpoints can run off the caller's thread (config.walCheckpointer),
- *     with this connection's automatic checkpoint kept as the backstop and
- *     SQLite's default restored when the worker fails; the worker's connection
- *     is closed before the closing TRUNCATE, and a TRUNCATE checkpoint precedes
- *     the pre-migration snapshot.
  */
-export const ENGINE_SAFETY_VERSION = 4
-
-/** SQLite's own wal_autocheckpoint default, restored when the worker stops. */
-const DEFAULT_WAL_AUTOCHECKPOINT_PAGES = 1000
-const DEFAULT_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
-/** See DatabaseEngineConfig.walBackstopPages: SQLite's own default. */
-const DEFAULT_WAL_BACKSTOP_PAGES = DEFAULT_WAL_AUTOCHECKPOINT_PAGES
+export const ENGINE_SAFETY_VERSION = 3
 
 /** A namespaced Windows path (\\?\C:\... or \\?\UNC\host\...) in its ordinary form. */
 /**
@@ -758,10 +711,6 @@ export class DatabaseEngine {
     thresholdBytes: 0,
   }
   private checkpointCount = 0
-  /** The worker checkpointer of the open writable connection, once started. */
-  private walCheckpointer: WalCheckpointer | null = null
-  /** True only while the worker has confirmed it runs and this connection's automatic checkpoint is the backstop. */
-  private walCheckpointsOffThread = false
   private deferredBackupPending = false
   /** This boot's verified pre-migration snapshot, for the audit row. */
   private migrationBackupPath: string | null = null
@@ -769,10 +718,7 @@ export class DatabaseEngine {
   private readonly protectedTables: Set<string>
   private massDeleteAllowed = false
 
-  private readonly config: DatabaseEngineConfig
-
-  constructor(config: DatabaseEngineConfig) {
-    this.config = config
+  constructor(private readonly config: DatabaseEngineConfig) {
     this.protectedTables = new Set((config.protectedTables ?? []).map((t) => t.toLowerCase()))
   }
 
@@ -1134,7 +1080,6 @@ export class DatabaseEngine {
       bdb.pragma('busy_timeout = 5000')
       bdb.pragma('foreign_keys = ON')
       this.shim = new SqlJsCompatDatabase(bdb, this.recordChanges, () => this.lastChanges)
-      this.startWalCheckpointer()
     } catch (error) {
       this.bdb = null
       this.shim = null
@@ -1214,12 +1159,6 @@ export class DatabaseEngine {
       const versionBeforeBoot = hadExistingFile ? this.readSchemaVersion() : this.config.schemaVersion
       const migrationPending = hadExistingFile && versionBeforeBoot < this.config.schemaVersion
       const deferRoutineBackup = this.config.deferBackupOnBoot === true && !migrationPending
-      if (migrationPending) {
-        // Nothing is interactive yet: fold the WAL a crashed run left behind
-        // into the file before the snapshot. The backup API copies WAL frames
-        // too, so the copy is complete either way; this makes the source one file.
-        this.truncateWal()
-      }
       if (hadExistingFile && !deferRoutineBackup) {
         await this.backupOnBoot(migrationPending, options.onProgress, beforeOpen)
       }
@@ -1288,8 +1227,6 @@ export class DatabaseEngine {
       if (hadExistingFile && deferRoutineBackup) {
         this.deferredBackupPending = true
       }
-
-      this.startWalCheckpointer()
 
       console.log(`[Database] Initialization complete (schema v${this.config.schemaVersion})`)
     } catch (error) {
@@ -1453,93 +1390,17 @@ export class DatabaseEngine {
     }
   }
 
-  /** TRUNCATE checkpoint on this connection, for moments nothing is interactive (boot, close). */
-  private truncateWal(): void {
-    try {
-      this.getBdb().pragma('wal_checkpoint(TRUNCATE)')
-    } catch (e) {
-      console.warn('[Database] WAL checkpoint (TRUNCATE) failed (non-fatal):', (e as Error).message)
-    }
-  }
-
-  /**
-   * Start the host's checkpoint worker for this writable connection. The
-   * backstop and the journal size limit apply once it says its connection is open.
-   */
-  private startWalCheckpointer(): void {
-    const factory = this.config.walCheckpointer
-    if (!factory || this.walCheckpointer) return
-    const bdb = this.getBdb()
-    let checkpointer: WalCheckpointer | null = null
-    const current = (): boolean => checkpointer !== null && this.walCheckpointer === checkpointer && this.bdb === bdb
-    try {
-      checkpointer = factory(this.dbPath, {
-        onReady: () => {
-          if (!current()) return
-          try {
-            bdb.pragma(`wal_autocheckpoint = ${this.config.walBackstopPages ?? DEFAULT_WAL_BACKSTOP_PAGES}`)
-            bdb.pragma(`journal_size_limit = ${this.config.walJournalSizeLimitBytes ?? DEFAULT_WAL_JOURNAL_SIZE_LIMIT_BYTES}`)
-            this.walCheckpointsOffThread = true
-          } catch (e) {
-            console.error('[Database] Could not hand WAL checkpoints to the worker; keeping them here:', (e as Error).message)
-            this.stopWalCheckpointer()
-          }
-        },
-        onCheckpoint: () => {
-          if (current()) this.checkpointCount++
-        },
-        onFailure: (error) => {
-          if (!current()) return
-          console.error('[Database] WAL checkpoint worker stopped; checkpoints run on this thread again:', error.message)
-          this.walCheckpointer = null
-          this.restoreAutoCheckpoint(bdb)
-        },
-      })
-    } catch (e) {
-      console.error('[Database] Could not start the WAL checkpoint worker; checkpoints stay on this thread:', (e as Error).message)
-      checkpointer = null
-    }
-    this.walCheckpointer = checkpointer
-  }
-
-  /** Back to SQLite's automatic checkpoint on the app connection. */
-  private restoreAutoCheckpoint(bdb: BetterSqlite3Database): void {
-    this.walCheckpointsOffThread = false
-    if (!bdb.open) return
-    try {
-      bdb.pragma(`wal_autocheckpoint = ${DEFAULT_WAL_AUTOCHECKPOINT_PAGES}`)
-      bdb.pragma('journal_size_limit = -1')
-    } catch (e) {
-      console.error('[Database] Could not restore the automatic WAL checkpoint:', (e as Error).message)
-    }
-  }
-
-  /** Stop the worker and wait for its connection to close (shutdown and re-initialize only). */
-  private stopWalCheckpointer(): void {
-    const checkpointer = this.walCheckpointer
-    if (!checkpointer) return
-    this.walCheckpointer = null
-    if (!checkpointer.stop()) console.warn('[Database] WAL checkpoint worker did not confirm its stop in time')
-    if (this.bdb) this.restoreAutoCheckpoint(this.bdb)
-  }
-
-  /** Whether a worker thread runs this connection's WAL checkpoints right now. */
-  walCheckpointsOffMainThread(): boolean {
-    return this.walCheckpointsOffThread
-  }
-
   /**
    * Durability is automatic under WAL (every write is journaled synchronously).
-   * saveDatabase()/flushNow() remain for API compatibility and checkpoint the
-   * WAL: with the worker running they ask it for one and return at once.
+   * saveDatabase()/flushNow() remain for API compatibility and simply checkpoint
+   * the WAL — there is no full-DB export to perform.
    */
   saveDatabase(): void {
-    if (this.walCheckpointsOffThread && this.walCheckpointer) this.walCheckpointer.request()
-    else this.checkpoint()
+    this.checkpoint()
   }
 
   flushNow(): void {
-    this.saveDatabase()
+    this.checkpoint()
   }
 
   getDatabase(): SqlJsCompatDatabaseApi {
@@ -1554,9 +1415,6 @@ export class DatabaseEngine {
 
   closeDatabase(): void {
     if (this.bdb) {
-      // The worker's connection closes first: a TRUNCATE never waits for
-      // another connection's checkpoint, and this one should be the last.
-      this.stopWalCheckpointer()
       try {
         this.bdb.pragma('wal_checkpoint(TRUNCATE)')
       } catch {

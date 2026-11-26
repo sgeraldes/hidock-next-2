@@ -2,7 +2,6 @@ import { MIN_MEETING_CONFIDENCE } from '../../../src/shared/meeting-confidence'
 import Database from 'better-sqlite3'
 import { mainThreadBudget, yieldToEventLoop } from './event-loop'
 import { closeDatabaseBackupWorker as closeSqliteBackupWorker, runDatabaseBackup } from './sqlite-backup-host'
-import { createWalCheckpointer } from './wal-checkpoint-host'
 import { resolveDeviceRecording } from '../../../src/shared/recording-identity'
 import { RECORDING_AUDIO_EXTENSIONS } from '../../../src/shared/audio-extensions'
 import { existsSync, readdirSync, readFileSync } from 'fs'
@@ -4564,16 +4563,7 @@ const engine = new DatabaseEngine({
   backupExecutor: runDatabaseBackup,
   deferBackupOnBoot: true,
   externalBackups: listHourlyBackups,
-  // A checkpoint took 46 to 720 ms on the owner's PC, inside a COMMIT on this
-  // thread. A worker thread copies and syncs the WAL instead; this
-  // connection's automatic checkpoint stays as the backstop.
-  walCheckpointer: createWalCheckpointer,
 })
-
-/** Whether the WAL checkpoint worker runs the library's checkpoints right now. */
-export function walCheckpointsOffMainThread(): boolean {
-  return engine.walCheckpointsOffMainThread()
-}
 
 /**
  * The hourly backups written by `scripts/backup-db.py` (Windows task
@@ -4737,15 +4727,11 @@ export function run(sql: string, params: any[] = []): void {
 // yielding reconciliation is active, without changing WAL durability or turning
 // checkpoints off. Reference counting preserves the setting across overlapping
 // callers; an explicitly disabled (0) or already smaller limit is left alone.
-// With the checkpoint worker running the setting is the engine's backstop and
-// stays where it is: at 128 pages this connection would checkpoint before the
-// worker had copied the WAL. If the worker took over while a budget was held,
-// the release leaves the engine's setting alone too.
 let organizationCheckpointUsers = 0
 let organizationCheckpointPrevious: number | undefined
 
 export function acquireOrganizationCheckpointBudget(): () => void {
-  if (organizationCheckpointUsers === 0 && !engine.walCheckpointsOffMainThread()) {
+  if (organizationCheckpointUsers === 0) {
     const previous = queryOne<{ wal_autocheckpoint: number }>('PRAGMA wal_autocheckpoint')?.wal_autocheckpoint
     organizationCheckpointPrevious = previous !== undefined && previous > 128 ? previous : undefined
     if (organizationCheckpointPrevious !== undefined) queryOne('PRAGMA wal_autocheckpoint = 128')
@@ -4758,7 +4744,7 @@ export function acquireOrganizationCheckpointBudget(): () => void {
     if (--organizationCheckpointUsers === 0 && organizationCheckpointPrevious !== undefined) {
       const previous = organizationCheckpointPrevious
       organizationCheckpointPrevious = undefined
-      if (!engine.walCheckpointsOffMainThread()) queryOne(`PRAGMA wal_autocheckpoint = ${previous}`)
+      queryOne(`PRAGMA wal_autocheckpoint = ${previous}`)
     }
   }
 }

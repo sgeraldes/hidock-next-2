@@ -31,8 +31,7 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'electron/main/bootstrap.ts'),
           'local-embedder-worker': resolve(__dirname, 'electron/main/local-embedder-worker.ts'),
-          'sqlite-backup-worker': resolve(__dirname, 'electron/main/sqlite-backup-worker.ts'),
-          'wal-checkpoint-worker': resolve(__dirname, 'electron/main/wal-checkpoint-worker.ts')
+          'sqlite-backup-worker': resolve(__dirname, 'electron/main/sqlite-backup-worker.ts')
         }
       }
     }
