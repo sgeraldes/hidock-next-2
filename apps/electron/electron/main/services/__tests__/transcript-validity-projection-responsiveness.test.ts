@@ -60,8 +60,9 @@ describe('full library projection', () => {
     const { initializeDatabase, closeDatabase, run, runNoSave, saveDatabase } = await import('../database')
     const { backfillTranscriptValidity } = await import('../transcript-validity-store')
     const { autoLinkRecordingsToMeetings } = await import('../org-reconciler')
-    await initializeDatabase()
+    // Registered first: an initialization that opens SQLite and then throws still gets closed.
     closeCurrent = closeDatabase
+    await initializeDatabase()
     await backfillTranscriptValidity()
     run(`INSERT INTO meetings (id,subject,start_time,end_time,attendees) VALUES ('projection-meeting','Sync','2026-10-05','2026-10-06','[{}]')`)
     for (let i = 0; i < 2140; i++) {
