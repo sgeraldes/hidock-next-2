@@ -12,13 +12,14 @@
  * slice against the 250 ms CI bound.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, afterAll, vi } from 'vitest'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { existsSync, rmSync, writeFileSync } from 'fs'
 
 const paths = vi.hoisted(() => ({ db: '', cache: '' }))
-paths.db = join(tmpdir(), `hidock-validity-projection-${process.pid}-${Date.now()}.db`)
+const dbRoot = join(tmpdir(), `hidock-validity-projection-${process.pid}-${Date.now()}`)
+const dbFiles: string[] = []
 paths.cache = join(tmpdir(), `hidock-validity-projection-cache-${process.pid}-${Date.now()}`)
 
 vi.mock('../file-storage', () => ({
@@ -32,24 +33,35 @@ vi.mock('../config', () => ({
 const emitDomainEvent = vi.hoisted(() => vi.fn())
 vi.mock('../event-bus', () => ({ getEventBus: () => ({ emitDomainEvent }) }))
 
-import { initializeDatabase, closeDatabase, run, runNoSave, saveDatabase } from '../database'
-import { backfillTranscriptValidity } from '../transcript-validity-store'
-import { autoLinkRecordingsToMeetings } from '../org-reconciler'
-
-beforeAll(async () => {
-  await initializeDatabase()
-})
+let closeCurrent: (() => void) | null = null
+let attempt = 0
 
 afterAll(() => {
-  closeDatabase()
-  for (const suffix of ['', '-wal', '-shm', '.tmp']) {
-    if (existsSync(`${paths.db}${suffix}`)) rmSync(`${paths.db}${suffix}`, { force: true })
+  closeCurrent?.()
+  for (const db of dbFiles) {
+    for (const suffix of ['', '-wal', '-shm', '.tmp']) {
+      if (existsSync(`${db}${suffix}`)) rmSync(`${db}${suffix}`, { force: true })
+    }
   }
   if (existsSync(paths.cache)) rmSync(paths.cache, { recursive: true, force: true })
 })
 
+// As in background-pass-responsiveness.test.ts: one stall of this machine (another
+// session's suite, a disk flush) can hold any slice, so a single stall gets one retry,
+// on a fresh database with fresh modules. A pass that does not yield misses the bound
+// on both attempts. Seen on the dev PC in a full run (PR #198): one 597 ms slice, while
+// the same file alone measured 3 to 6 ms three times.
 describe('full library projection', () => {
-  it('drains 2140 stale rows despite clearing AI meeting links and checks zero next pass', async () => {
+  it('drains 2140 stale rows despite clearing AI meeting links and checks zero next pass', { retry: 1, timeout: 240_000 }, async () => {
+    closeCurrent?.()
+    paths.db = `${dbRoot}-${++attempt}.db`
+    dbFiles.push(paths.db)
+    vi.resetModules()
+    const { initializeDatabase, closeDatabase, run, runNoSave, saveDatabase } = await import('../database')
+    const { backfillTranscriptValidity } = await import('../transcript-validity-store')
+    const { autoLinkRecordingsToMeetings } = await import('../org-reconciler')
+    await initializeDatabase()
+    closeCurrent = closeDatabase
     await backfillTranscriptValidity()
     run(`INSERT INTO meetings (id,subject,start_time,end_time,attendees) VALUES ('projection-meeting','Sync','2026-10-05','2026-10-06','[{}]')`)
     for (let i = 0; i < 2140; i++) {
@@ -84,5 +96,5 @@ describe('full library projection', () => {
     expect((await backfillTranscriptValidity()).checked).toBe(0)
     expect(autoLinkRecordingsToMeetings()).toBe(0)
     expect((await backfillTranscriptValidity()).checked).toBe(0)
-  }, 120000)
+  })
 })
