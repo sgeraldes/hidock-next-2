@@ -22,7 +22,9 @@ export const usePcRecorderStore = create<PcRecorderState>((set, get) => ({
   open: () => set({ visible: true }),
   dismiss: () => set({ visible: false }),
   start: async () => {
-    if (get().status !== 'idle') return
+    // 'saved' is the five-second "Saved to Library" notice: a new recording may
+    // start from it, and clearing its timer keeps it from resetting the new one.
+    if (get().status !== 'idle' && get().status !== 'saved') return
     clearSavedTimer()
     set({ status: 'starting', error: null, elapsed: 0, levels: [0, 0] })
     try {

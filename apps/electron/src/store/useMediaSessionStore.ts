@@ -75,6 +75,9 @@ export function registerElementMedia(element: HTMLMediaElement, getMeta: () => E
     useMediaSessionStore.setState({ currentTime: finite(element.currentTime), duration: finite(element.duration) })
   }
   const onPlay = () => {
+    // play() queues this event after it clears `paused`; a pause in between
+    // (a recording started meanwhile) means it no longer plays.
+    if (element.paused) return
     pauseElementMedia({ except: element })
     // Starting here stops a recording that plays (or is still loading) elsewhere.
     window.__audioControls?.stop()
@@ -88,6 +91,7 @@ export function registerElementMedia(element: HTMLMediaElement, getMeta: () => E
   const onPause = () => {
     if (isActive(element)) useMediaSessionStore.setState({ isPlaying: false })
   }
+  // Ended, a swapped source (emptied) or a failure: nothing is playing any more.
   const onEnded = () => {
     if (isActive(element)) endSession()
   }
@@ -95,6 +99,8 @@ export function registerElementMedia(element: HTMLMediaElement, getMeta: () => E
   element.addEventListener('play', onPlay)
   element.addEventListener('pause', onPause)
   element.addEventListener('ended', onEnded)
+  element.addEventListener('emptied', onEnded)
+  element.addEventListener('error', onEnded)
   element.addEventListener('timeupdate', progress)
   element.addEventListener('durationchange', progress)
   element.addEventListener('loadedmetadata', progress)
@@ -103,6 +109,8 @@ export function registerElementMedia(element: HTMLMediaElement, getMeta: () => E
     element.removeEventListener('play', onPlay)
     element.removeEventListener('pause', onPause)
     element.removeEventListener('ended', onEnded)
+    element.removeEventListener('emptied', onEnded)
+    element.removeEventListener('error', onEnded)
     element.removeEventListener('timeupdate', progress)
     element.removeEventListener('durationchange', progress)
     element.removeEventListener('loadedmetadata', progress)

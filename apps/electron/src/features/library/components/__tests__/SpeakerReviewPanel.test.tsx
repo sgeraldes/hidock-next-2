@@ -49,7 +49,10 @@ describe('SpeakerReviewPanel', () => {
     expect(api.repairSample).toHaveBeenCalledWith('r1', 'turn-3', 'a'.repeat(64))
     expect(screen.getByLabelText('Speaker sample with surrounding context')).toHaveAttribute('src', 'blob:bounded-sample')
     // The sample joins the app-wide media session (one playback at a time, shown in the header).
-    fireEvent(screen.getByLabelText('Speaker sample with surrounding context'), new Event('play'))
+    const sample = screen.getByLabelText('Speaker sample with surrounding context')
+    Object.defineProperty(sample, 'paused', { configurable: true, get: () => false })
+    fireEvent(sample, new Event('play'))
+    Object.defineProperty(sample, 'paused', { configurable: true, get: () => true })
     expect(useMediaSessionStore.getState().active).toMatchObject({ kind: 'audio', title: 'Speaker sample', sourceId: 'r1' })
     fireEvent.click(screen.getByRole('button', { name: 'Both speaking' }))
     await waitFor(() => expect(api.confirmRepairSample).toHaveBeenCalledWith('r1', 'turn-3', 'a'.repeat(64), 'overlap'))

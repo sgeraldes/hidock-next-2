@@ -135,6 +135,9 @@ describe('Integrated titlebar — search left, media right', () => {
     expect(follows(media, notifications)).toBe(true)
     // Left-aligned: the search no longer centres itself.
     expect(search).not.toHaveClass('mx-auto')
+    // The media cell is a size container with a floor that fits Pause + Stop
+    // or a recording's dot, time and Stop; the search keeps its own floor.
+    expect(screen.getByTestId('header-media-cell')).toHaveClass('@container', 'min-w-[6rem]', 'flex-1')
     // Idle: the media area offers Record and nothing else.
     expect(within(media).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Record'])
   })

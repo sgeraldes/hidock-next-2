@@ -40,11 +40,19 @@ const TEXT_BUTTON =
 const SEGMENT = 'flex h-7 min-w-0 items-center gap-1.5'
 const CLOCK = 'font-mono text-[13px] tabular-nums text-slate-300'
 
-/** How often the header asks main for the live session while the HiDock is connected. */
-const LIVE_POLL_MS = 2000
+/**
+ * While a live session runs, the header also asks main every few seconds: a
+ * session can end without a stop call (the Device page closing, an error).
+ * While idle it only listens: main pushes the state on start, on stop and with
+ * every packet.
+ */
+const LIVE_POLL_MS = 3000
 
 /** The Device page's live streaming card (pages/Device.tsx). */
 export const LIVE_SECTION_ID = 'device-live-streaming'
+
+/** How long the header waits for the Device page to render its live card. */
+const REVEAL_WAIT_MS = 5000
 
 /**
  * Live capture runs on the Device page (it polls the device and stops when the
@@ -54,15 +62,15 @@ export const LIVE_SECTION_ID = 'device-live-streaming'
 function useRevealLive(): () => void {
   const navigate = useNavigate()
   return () => {
-    navigate('/sync', { state: { focus: 'live' } })
-    let attempts = 0
+    navigate('/sync')
+    const deadline = Date.now() + REVEAL_WAIT_MS
     const reveal = () => {
       const section = document.getElementById(LIVE_SECTION_ID)
       if (section) {
         section.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
         section.focus({ preventScroll: true })
-      } else if (++attempts < 40) {
-        window.setTimeout(reveal, 50)
+      } else if (Date.now() < deadline) {
+        window.setTimeout(reveal, 100)
       }
     }
     window.setTimeout(reveal, 0)
@@ -81,42 +89,43 @@ function RecordingDot({ paused = false }: { paused?: boolean }) {
   )
 }
 
-/**
- * The HiDock's live session, as main reports it. Main pushes an update with
- * every packet but none on stop, so the header also asks every two seconds,
- * and only while the device is connected.
- */
+/** The HiDock's live session as main reports it, only while the device is connected. */
 function useDeviceLiveSession(enabled: boolean): DeviceAudioDiagnosticsState | null {
   const [state, setState] = useState<DeviceAudioDiagnosticsState | null>(null)
+  const active = enabled && state !== null && state.session.status !== 'idle'
   useEffect(() => {
     const api = window.electronAPI?.jensen
     if (!enabled || !api?.getAudioDiagnostics) return
     let cancelled = false
-    let requesting = false
     const receive = (value: DeviceAudioDiagnosticsState) => {
       if (!cancelled) setState(value)
     }
-    const refresh = async () => {
-      if (requesting || cancelled) return
-      requesting = true
-      try {
-        receive(await api.getAudioDiagnostics())
-      } catch (error) {
-        console.warn('[HeaderMedia] Live session read failed:', error)
-      } finally {
-        requesting = false
-      }
-    }
-    void refresh()
-    const timer = window.setInterval(() => void refresh(), LIVE_POLL_MS)
+    api.getAudioDiagnostics().then(receive, (error: unknown) => console.warn('[HeaderMedia] Live session read failed:', error))
     const unsubscribe = api.onAudioDiagnostics?.(receive)
     return () => {
       cancelled = true
-      window.clearInterval(timer)
       unsubscribe?.()
       setState(null)
     }
   }, [enabled])
+  useEffect(() => {
+    const api = window.electronAPI?.jensen
+    if (!active || !api?.getAudioDiagnostics) return
+    let cancelled = false
+    let requesting = false
+    const timer = window.setInterval(() => {
+      if (requesting) return
+      requesting = true
+      api.getAudioDiagnostics()
+        .then((value) => { if (!cancelled) setState(value) })
+        .catch((error: unknown) => console.warn('[HeaderMedia] Live session read failed:', error))
+        .finally(() => { requesting = false })
+    }, LIVE_POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [active])
   return enabled ? state : null
 }
 
@@ -135,7 +144,7 @@ function PcRecordingSegment() {
         className="titlebar-no-drag flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[13px] text-red-300 hover:bg-slate-800 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400"
       >
         <RecordingDot />
-        <span className="hidden md:inline">{status === 'starting' ? 'Starting' : saving ? 'Saving' : 'Recording'}</span>
+        <span className="hidden @3xs:inline">{status === 'starting' ? 'Starting' : saving ? 'Saving' : 'Recording'}</span>
         <span className={CLOCK}>{formatDuration(elapsed)}</span>
       </button>
       <button
@@ -177,8 +186,8 @@ function LiveSegment({ live }: { live: DeviceAudioDiagnosticsState }) {
         className="titlebar-no-drag flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[13px] text-red-300 hover:bg-slate-800 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sky-400"
       >
         <RecordingDot paused={paused} />
-        <span className="hidden md:inline">{paused ? `${label}, paused` : label}</span>
-        <span className="sr-only md:hidden">{paused ? 'paused' : ''}</span>
+        <span className="hidden @3xs:inline">{paused ? `${label}, paused` : label}</span>
+        <span className="sr-only @3xs:hidden">{paused ? 'paused' : ''}</span>
         <span className={CLOCK}>{formatDuration(live.diagnostics.sampleElapsedMs / 1000)}</span>
       </button>
       <button
@@ -230,6 +239,10 @@ function usePlaybackView(): PlaybackView | null {
   const recordingTime = useUIStore((s) => s.playbackCurrentTime)
   const recordingDuration = useUIStore((s) => s.playbackDuration)
   const recordingTitle = useRecordingTitle(recordingId, recordingPath)
+  // A recording shows here once it has played. Loading one to show a find
+  // result (play with autoPlay false) does not take over the header.
+  const [playedId, setPlayedId] = useState<string | null>(null)
+  if (recordingId && recordingPlaying && playedId !== recordingId) setPlayedId(recordingId)
 
   if (element) {
     const media = element.element
@@ -240,12 +253,15 @@ function usePlaybackView(): PlaybackView | null {
       currentTime: elementTime,
       duration: elementDuration,
       sourceId: element.sourceId ?? null,
-      toggle: () => { if (media.paused) void media.play(); else media.pause() },
+      toggle: () => {
+        if (!media.paused) { media.pause(); return }
+        media.play().catch((error: unknown) => console.warn('[HeaderMedia] Playback did not start:', error))
+      },
       seek: (time) => { media.currentTime = time },
       stop: () => pauseElementMedia({ endSession: true })
     }
   }
-  if (recordingId) {
+  if (recordingId && playedId === recordingId) {
     return {
       key: recordingId,
       title: recordingTitle,
@@ -291,29 +307,29 @@ function PlaybackSegment({ view }: { view: PlaybackView }) {
       >
         {view.isPlaying ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
       </button>
-      <span title={view.title} className="hidden min-w-0 max-w-[14rem] truncate text-[13px] text-slate-100 lg:block">
+      <span title={view.title} className="hidden min-w-0 max-w-[14rem] truncate text-[13px] text-slate-100 @md:block">
         {view.title}
       </span>
-      <span className={cn(CLOCK, 'hidden sm:inline')}>{formatDuration(view.currentTime)}</span>
+      <span className={cn(CLOCK, 'hidden @2xs:inline')}>{formatDuration(view.currentTime)}</span>
       <input
         type="range"
         aria-label="Playback position"
         aria-valuetext={`${formatDuration(view.currentTime)} of ${formatDuration(view.duration)}`}
         min={0}
         max={canSeek ? view.duration : 0}
-        step={0.1}
+        step={1}
         value={canSeek ? Math.min(view.currentTime, view.duration) : 0}
         disabled={!canSeek}
         onChange={(event) => view.seek(Number(event.target.value))}
-        className="titlebar-no-drag hidden h-7 w-20 min-w-0 cursor-pointer accent-sky-400 disabled:cursor-default md:block xl:w-36"
+        className="titlebar-no-drag hidden h-7 w-20 min-w-0 cursor-pointer accent-sky-400 disabled:cursor-default @xs:block @lg:w-36"
       />
-      <span className={cn(CLOCK, 'hidden text-slate-400 sm:inline')}>{formatDuration(view.duration)}</span>
+      <span className={cn(CLOCK, 'hidden text-slate-400 @2xs:inline')}>{formatDuration(view.duration)}</span>
       <button
         type="button"
         aria-label={`Open ${view.title}`}
         title={`Open ${view.title}`}
         onClick={openSource}
-        className={ICON_BUTTON}
+        className={cn(ICON_BUTTON, 'hidden @3xs:flex')}
       >
         <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
@@ -336,7 +352,7 @@ function RecordControl({ deviceConnected }: { deviceConnected: boolean }) {
       <DropdownMenuTrigger asChild>
         <button type="button" className={TEXT_BUTTON} aria-label="Record" title="Record">
           <Mic className="h-3.5 w-3.5" aria-hidden="true" />
-          <span className="hidden md:inline">Record</span>
+          <span className="hidden @3xs:inline">Record</span>
           <ChevronDown className="h-3 w-3 opacity-70" aria-hidden="true" />
         </button>
       </DropdownMenuTrigger>
@@ -376,17 +392,25 @@ export function HeaderMedia() {
 
   const recording = recorderStatus === 'starting' || recorderStatus === 'recording' || recorderStatus === 'saving'
   const liveActive = live !== null && live.session.status !== 'idle'
-  const nothing = !recording && !liveActive && !playback
+  const capturing = recording || liveActive
 
   return (
-    // min-w-0 + overflow-hidden: at narrow widths this area gives way before the
-    // search (which keeps its 160px floor) and never spills over the right
-    // cluster or the window controls. The padding keeps focus rings visible.
+    // Sized by its container (TitleBar's media cell, an @container with a
+    // 6rem floor): details step aside by the width this area really has, so
+    // the Pause, Stop and recording controls always fit and nothing spills
+    // over the search, the right cluster or the window controls. The padding
+    // keeps focus rings visible inside the clip.
     <div className="flex min-w-0 shrink items-center justify-end gap-3 overflow-hidden p-0.5" aria-label="Media" role="region">
       {recording && <PcRecordingSegment />}
       {liveActive && <LiveSegment live={live} />}
       {playback && <PlaybackSegment view={playback} />}
-      {nothing && <RecordControl deviceConnected={deviceConnected} />}
+      {/* Record is the whole area when nothing plays; next to a playback it
+          shows only when there is room for both. */}
+      {!capturing && (
+        <div className={playback ? 'hidden @sm:flex' : 'flex'}>
+          <RecordControl deviceConnected={deviceConnected} />
+        </div>
+      )}
     </div>
   )
 }

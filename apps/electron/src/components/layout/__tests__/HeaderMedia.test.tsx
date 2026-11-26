@@ -23,6 +23,7 @@ vi.mock('@/lib/pc-audio-capture', () => ({ PcAudioCapture: class {
 const controls = { play: vi.fn(), pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), seek: vi.fn(), setPlaybackRate: vi.fn(), loadWaveformOnly: vi.fn() }
 let diagnostics: DeviceAudioDiagnosticsState
 const stopRealtime = vi.fn(async () => ({ result: 'success' }))
+let pushLive: ((state: DeviceAudioDiagnosticsState) => void) | null = null
 
 function liveState(status: DeviceAudioDiagnosticsState['session']['status'], transcribe = true, elapsedMs = 0): DeviceAudioDiagnosticsState {
   return {
@@ -58,7 +59,7 @@ beforeEach(() => {
   window.__audioControls = controls as unknown as typeof window.__audioControls
   window.electronAPI = {
     pcRecorder: {},
-    jensen: { getAudioDiagnostics: vi.fn(async () => diagnostics), onAudioDiagnostics: vi.fn(() => () => undefined), stopRealtime }
+    jensen: { getAudioDiagnostics: vi.fn(async () => diagnostics), onAudioDiagnostics: vi.fn((callback: (state: DeviceAudioDiagnosticsState) => void) => { pushLive = callback; return () => undefined }), stopRealtime }
   } as unknown as typeof window.electronAPI
   useUIStore.setState({ currentlyPlayingId: null, currentlyPlayingPath: null, isPlaying: false, playbackCurrentTime: 0, playbackDuration: 0 })
   useMediaSessionStore.setState({ active: null, isPlaying: false, currentTime: 0, duration: 0 })
@@ -86,12 +87,21 @@ describe('HeaderMedia when nothing plays', () => {
     expect(usePcRecorderStore.getState().visible).toBe(true)
   })
 
+  it('starts a new PC recording while the last one still shows Saved to Library', async () => {
+    usePcRecorderStore.setState({ visible: true, status: 'saved', elapsed: 12 })
+    renderMedia()
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Record' }), { key: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: /record on this pc/i }))
+    await waitFor(() => expect(usePcRecorderStore.getState().status).toBe('recording'))
+    await act(async () => { await usePcRecorderStore.getState().stop() })
+  })
+
   it('opens live transcription on the Device page when the HiDock is connected', async () => {
     setConnected(true)
     renderMedia()
     fireEvent.keyDown(screen.getByRole('button', { name: 'Record' }), { key: 'Enter' })
     fireEvent.click(await screen.findByRole('menuitem', { name: /live transcription/i }))
-    expect(screen.getByTestId('where')).toHaveTextContent('/sync {"focus":"live"}')
+    expect(screen.getByTestId('where')).toHaveTextContent('/sync null')
   })
 
   it('brings the Device page live controls into view once they render', async () => {
@@ -129,7 +139,10 @@ describe('HeaderMedia during recording playback', () => {
     expect(screen.getByText('3:10')).toBeInTheDocument()
     const slider = screen.getByRole('slider', { name: 'Playback position' })
     expect(slider).toHaveValue('65')
-    expect(screen.queryByRole('button', { name: 'Record' })).not.toBeInTheDocument()
+    // Whole seconds per arrow key.
+    expect(slider).toHaveAttribute('step', '1')
+    // Record stays reachable next to a playback.
+    expect(screen.getByRole('button', { name: 'Record' })).toBeInTheDocument()
   })
 
   it('pauses, resumes, seeks and stops through the shared player', () => {
@@ -171,7 +184,50 @@ describe('HeaderMedia during recording playback', () => {
   })
 })
 
+describe('HeaderMedia for a recording loaded without playing', () => {
+  it('stays on Record when a find result only loads and seeks the recording, and appears once it plays', () => {
+    useUIStore.setState({ currentlyPlayingId: 'rec-1', currentlyPlayingPath: '/a.mp3', isPlaying: false, playbackCurrentTime: 30, playbackDuration: 190 })
+    renderMedia()
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Record' })).toBeInTheDocument()
+
+    act(() => useUIStore.setState({ isPlaying: true }))
+    expect(screen.getByRole('slider', { name: 'Playback position' })).toBeInTheDocument()
+    // Paused after playing: the controls stay, so it can be resumed from here.
+    act(() => useUIStore.setState({ isPlaying: false }))
+    expect(screen.getByRole('button', { name: 'Play' })).toBeInTheDocument()
+  })
+})
+
+describe('HeaderMedia at narrow widths', () => {
+  it('never hides the controls that pause or stop', () => {
+    useUIStore.setState({ currentlyPlayingId: 'rec-1', currentlyPlayingPath: '/a.mp3', isPlaying: true, playbackCurrentTime: 1, playbackDuration: 10 })
+    usePcRecorderStore.setState({ visible: true, status: 'recording', elapsed: 3 })
+    renderMedia()
+    for (const name of ['Pause', 'Stop playback', 'Stop recording']) {
+      expect(screen.getByRole('button', { name }).className).not.toMatch(/(^|\s)hidden(\s|$)/)
+    }
+  })
+})
+
 describe('HeaderMedia during page video playback', () => {
+  it('reports a video that refuses to play instead of leaving the rejection unhandled', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const video = document.createElement('video')
+    let paused = false
+    Object.defineProperty(video, 'paused', { get: () => paused })
+    const off = registerElementMedia(video, () => ({ kind: 'video', title: 'Broken clip' }))
+    video.dispatchEvent(new Event('play'))
+    paused = true
+    video.dispatchEvent(new Event('pause'))
+    video.play = vi.fn(() => Promise.reject(new Error('NotSupportedError')))
+    renderMedia()
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    await waitFor(() => expect(warn).toHaveBeenCalledWith('[HeaderMedia] Playback did not start:', expect.any(Error)))
+    off()
+    warn.mockRestore()
+  })
+
   it('shows and drives the page video', async () => {
     const video = document.createElement('video')
     let paused = true
@@ -226,6 +282,29 @@ describe('HeaderMedia during a recording', () => {
     diagnostics = liveState('paused', false, 0)
     renderMedia('/sync')
     expect(await screen.findByRole('group', { name: 'Live audio' })).toHaveTextContent(/paused/i)
+  })
+
+  it('reads the live state once and then waits for pushes while idle; polls only while a session runs', async () => {
+    vi.useFakeTimers()
+    try {
+      setConnected(true)
+      renderMedia('/sync')
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(window.electronAPI.jensen.getAudioDiagnostics).toHaveBeenCalledTimes(1)
+
+      diagnostics = liveState('streaming', true, 5_000)
+      act(() => pushLive?.(diagnostics))
+      expect(screen.getByRole('group', { name: 'Live transcription' })).toBeInTheDocument()
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(vi.mocked(window.electronAPI.jensen.getAudioDiagnostics).mock.calls.length).toBeGreaterThan(1)
+
+      diagnostics = liveState('idle')
+      act(() => pushLive?.(diagnostics))
+      const calls = vi.mocked(window.electronAPI.jensen.getAudioDiagnostics).mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(vi.mocked(window.electronAPI.jensen.getAudioDiagnostics).mock.calls.length).toBe(calls)
+      expect(screen.getByRole('button', { name: 'Record' })).toBeInTheDocument()
+    } finally { vi.useRealTimers() }
   })
 
   it('does not ask the device anything while it is disconnected', () => {

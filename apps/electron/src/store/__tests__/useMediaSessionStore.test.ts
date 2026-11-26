@@ -101,6 +101,27 @@ describe('media session: one playback at a time', () => {
     offIdle()
   })
 
+  it('ignores a queued play event from an element that was paused before it ran', async () => {
+    const element = fakeMedia()
+    const off = registerElementMedia(element, () => ({ kind: 'video', title: 'Clip' }))
+    // play() then pause() before the queued event fires (a recording started in between).
+    element.dispatchEvent(new Event('play'))
+    expect(stop).not.toHaveBeenCalled()
+    expect(useMediaSessionStore.getState().active).toBeNull()
+    off()
+  })
+
+  it('ends the session when the page swaps the source or the element fails', async () => {
+    for (const type of ['emptied', 'error']) {
+      const element = fakeMedia()
+      const off = registerElementMedia(element, () => ({ kind: 'video', title: 'Clip' }))
+      await element.play()
+      element.dispatchEvent(new Event(type))
+      expect(useMediaSessionStore.getState()).toMatchObject({ active: null, isPlaying: false })
+      off()
+    }
+  })
+
   it('ends the session when the element ends or unmounts', async () => {
     const element = fakeMedia()
     const off = registerElementMedia(element, () => ({ kind: 'audio', title: 'A' }))

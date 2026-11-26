@@ -90,7 +90,9 @@ describe('ArtifactReader', () => {
     const view = render(<MemoryRouter><ArtifactReader recording={makeRecording({ id: 'clip-1', filename: 'Clip.mp4' })} /></MemoryRouter>)
     await waitFor(() => expect(view.container.querySelector('video')).not.toBeNull())
     const element = view.container.querySelector('video')!
+    Object.defineProperty(element, 'paused', { configurable: true, get: () => false })
     fireEvent(element, new Event('play'))
+    Object.defineProperty(element, 'paused', { configurable: true, get: () => true })
     expect(stop).toHaveBeenCalledOnce()
     expect(useMediaSessionStore.getState().active).toMatchObject({ kind: 'video', title: 'Clip.mp4', sourceId: 'clip-1' })
     view.unmount()

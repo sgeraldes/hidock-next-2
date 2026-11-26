@@ -81,6 +81,19 @@ describe('New menu and global recording bar', () => {
       expect(usePcRecorderStore.getState()).toMatchObject({ status: 'idle', elapsed: 0 })
     } finally { vi.useRealTimers() }
   })
+  it('starts a new recording from the Saved notice, and the old notice timer does not end it', async () => {
+    vi.useFakeTimers()
+    try {
+      usePcRecorderStore.getState().open()
+      await act(async () => { await usePcRecorderStore.getState().start(); await usePcRecorderStore.getState().stop() })
+      expect(usePcRecorderStore.getState().status).toBe('saved')
+      await act(async () => { await usePcRecorderStore.getState().start() })
+      expect(usePcRecorderStore.getState().status).toBe('recording')
+      await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+      expect(usePcRecorderStore.getState()).toMatchObject({ status: 'recording', visible: true })
+      await act(async () => { await usePcRecorderStore.getState().stop() })
+    } finally { vi.useRealTimers() }
+  })
   it('can dismiss during recording without interrupting capture, and reopen to stop', async () => {
     usePcRecorderStore.getState().open()
     render(<RecordingBar />)
