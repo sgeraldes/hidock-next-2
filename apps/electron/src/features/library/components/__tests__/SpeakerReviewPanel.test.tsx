@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { SpeakerReviewPanel } from '../SpeakerReviewPanel'
 import type { RepairContext } from '@/shared/quality-repair'
+import { useMediaSessionStore } from '@/store/useMediaSessionStore'
 
 const context = (speaker = 'Voice A'): RepairContext => ({ evidenceFingerprint: 'a'.repeat(64),
   actions: ['review_samples', 'ask_user', 'defer', 'no_action'],
@@ -47,6 +48,9 @@ describe('SpeakerReviewPanel', () => {
     await screen.findByRole('button', { name: 'Both speaking' })
     expect(api.repairSample).toHaveBeenCalledWith('r1', 'turn-3', 'a'.repeat(64))
     expect(screen.getByLabelText('Speaker sample with surrounding context')).toHaveAttribute('src', 'blob:bounded-sample')
+    // The sample joins the app-wide media session (one playback at a time, shown in the header).
+    fireEvent(screen.getByLabelText('Speaker sample with surrounding context'), new Event('play'))
+    expect(useMediaSessionStore.getState().active).toMatchObject({ kind: 'audio', title: 'Speaker sample', sourceId: 'r1' })
     fireEvent.click(screen.getByRole('button', { name: 'Both speaking' }))
     await waitFor(() => expect(api.confirmRepairSample).toHaveBeenCalledWith('r1', 'turn-3', 'a'.repeat(64), 'overlap'))
     expect(await screen.findByText(/No entire voice label was reassigned/)).toBeInTheDocument()

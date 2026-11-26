@@ -16,6 +16,8 @@ import { Badge } from '@/components/ui/badge'
 import { Working } from '@/components/ui/working'
 import { formatDateTime, formatBytes } from '@/lib/utils'
 import type { UnifiedRecording } from '@/types/unified-recording'
+import { useExclusiveMedia } from '@/hooks/useExclusiveMedia'
+import { getDisplayTitle } from '../utils/getDisplayTitle'
 
 /** Slim artifact summary returned by `artifacts:getForCapture`. */
 interface ArtifactSummary {
@@ -274,8 +276,10 @@ function TextSurface({ content }: { content: ArtifactContent | null }) {
 }
 
 /** Video stays in the artifact store; its linked audio uses the normal recording reader. */
-function VideoSurface({ artifact, content }: { artifact: ArtifactSummary; content: ArtifactContent | null }) {
+function VideoSurface({ artifact, content, recording }: { artifact: ArtifactSummary; content: ArtifactContent | null; recording: UnifiedRecording }) {
   const navigate = useNavigate()
+  // One playback at a time; the header shows and drives this video while it plays.
+  const mediaRef = useExclusiveMedia({ kind: 'video', title: getDisplayTitle(recording).primaryText, sourceId: recording.id })
   const recordingId = getMetadataValue(artifact.metadata, 'audioRecordingId')
   const [transcript, setTranscript] = useState<string | null>(null)
   const [transcriptError, setTranscriptError] = useState(false)
@@ -297,7 +301,7 @@ function VideoSurface({ artifact, content }: { artifact: ArtifactSummary; conten
     return () => { cancelled = true }
   }, [recordingId])
   return <div className="space-y-3 rounded-md border border-border p-3">
-    {src ? <video controls preload="metadata" src={src} aria-label="Video player" className="w-full max-h-[420px] rounded-md" />
+    {src ? <video ref={mediaRef} controls preload="metadata" src={src} aria-label="Video player" className="w-full max-h-[420px] rounded-md" />
       : <p className="text-sm">Video preview unavailable. Open its folder to view the original file.</p>}
     {transcript && <section aria-label="Video transcript"><h3 className="text-sm font-medium">Transcript</h3><p className="whitespace-pre-wrap text-sm">{transcript}</p></section>}
     {transcriptError && <p className="text-sm text-muted-foreground">Could not load the saved transcript.</p>}
@@ -407,7 +411,7 @@ export function ArtifactReader({ recording, onAskAboutSource }: ArtifactReaderPr
     <div className="space-y-4">
       {kind === 'image' && <ImageSurface artifact={artifact} content={content} />}
       {kind === 'pdf' && <PdfSurface artifact={artifact} content={content} />}
-      {kind === 'video' && <VideoSurface artifact={artifact} content={content} />}
+      {kind === 'video' && <VideoSurface artifact={artifact} content={content} recording={recording} />}
       {isTextKind && <TextSurface content={content} />}
       {!['image', 'pdf', 'video'].includes(kind) && !isTextKind && <FallbackSurface kind={kind} />}
 
