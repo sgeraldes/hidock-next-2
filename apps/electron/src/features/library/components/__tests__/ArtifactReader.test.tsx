@@ -11,6 +11,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { ArtifactReader } from '../ArtifactReader'
 import { MemoryRouter } from 'react-router-dom'
 import type { UnifiedRecording } from '@/types/unified-recording'
+import { useMediaSessionStore } from '@/store/useMediaSessionStore'
 
 interface MockArtifactSummary {
   id: string
@@ -79,6 +80,24 @@ describe('ArtifactReader', () => {
     expect(await screen.findByRole('button', { name: 'Open video audio and transcript' })).toBeInTheDocument()
     expect(await screen.findByText('Saved video transcript')).toBeInTheDocument()
     expect(video.container.querySelector('video')).toHaveAttribute('src', expect.stringMatching(/^blob:/))
+  })
+
+  it('joins the app-wide media session: playing the video stops a recording and shows in the header', async () => {
+    const stop = vi.fn()
+    window.__audioControls = { stop } as unknown as typeof window.__audioControls
+    mockGetForCapture.mockResolvedValue({ success: true, data: [{ id: 'video', kind: 'video', metadata: {}, createdAt: '', size: 1 }] })
+    mockGetContent.mockResolvedValue({ success: true, data: { kind: 'video', mime: 'video/mp4', blobBase64: 'aGVsbG8=' } })
+    const view = render(<MemoryRouter><ArtifactReader recording={makeRecording({ id: 'clip-1', filename: 'Clip.mp4' })} /></MemoryRouter>)
+    await waitFor(() => expect(view.container.querySelector('video')).not.toBeNull())
+    const element = view.container.querySelector('video')!
+    Object.defineProperty(element, 'paused', { configurable: true, get: () => false })
+    fireEvent(element, new Event('play'))
+    Object.defineProperty(element, 'paused', { configurable: true, get: () => true })
+    expect(stop).toHaveBeenCalledOnce()
+    expect(useMediaSessionStore.getState().active).toMatchObject({ kind: 'video', title: 'Clip.mp4', sourceId: 'clip-1' })
+    view.unmount()
+    expect(useMediaSessionStore.getState().active).toBeNull()
+    delete window.__audioControls
   })
   it('while loading, shows placeholder lines named "Loading artifact", not a sentence', async () => {
     let finish: (v: unknown) => void = () => {}

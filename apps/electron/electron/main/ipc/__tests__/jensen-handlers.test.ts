@@ -634,6 +634,23 @@ describe('main-process library transfer', () => {
     expect(note.capture.framesWritten).toBe(16000)
   })
 
+  it('pushes the final live state to the window on start and on stop, so the header needs no idle polling', async () => {
+    mockJensen.getModel.mockReturnValue('hidock-h1e')
+    mockJensen.versionNumber = 393984
+    mockJensen.startRealtime.mockResolvedValue({ result: 'success' })
+    const event = makeEvent()
+    const pushes = () => event.sender.send.mock.calls.filter(([channel]) => channel === 'jensen:audio-diagnostics')
+
+    await mockHandlers['jensen:startRealtime'](event)
+    // The start push itself, not one the later stop sends.
+    const afterStart = pushes()
+    expect(afterStart).toHaveLength(1)
+    expect(afterStart[0][1].session.status).toMatch(/^(starting|streaming)$/)
+    await mockHandlers['jensen:stopRealtime'](event)
+    expect(pushes()).toHaveLength(2)
+    expect(pushes()[1][1]).toMatchObject({ session: { status: 'idle' } })
+  })
+
   it('an unplugged device saves the stream, and the next stream gets its own file', async () => {
     mockJensen.getModel.mockReturnValue('hidock-h1e')
     mockJensen.versionNumber = 393984

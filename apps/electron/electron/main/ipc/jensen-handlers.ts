@@ -1156,7 +1156,13 @@ export function registerJensenHandlers(): void {
     if (typeof profileId !== 'string' || !profileId || profileId.length > 80) throw new Error('Invalid recording profile')
     return { status: 'unsupported', reason: 'Native profile changes require verified firmware capability.' }
   })
-  ipcMain.handle('jensen:getAudioDiagnostics', event => ({ session: audioSession.snapshot(), diagnostics: liveDiagnostics.snapshot(), lastSessionId: lastCaptureSessionId, owned: audioSession.owns(event.sender.id ?? 0) }))
+  const audioDiagnosticsFor = (owner: number) => ({ session: audioSession.snapshot(), diagnostics: liveDiagnostics.snapshot(), lastSessionId: lastCaptureSessionId, owned: audioSession.owns(owner) })
+  // Packets push their state as they arrive; start and stop push too, so the
+  // header's media area learns that a live session began or ended without polling.
+  const pushAudioDiagnostics = (event: Electron.IpcMainInvokeEvent) => {
+    if (!event.sender.isDestroyed()) event.sender.send('jensen:audio-diagnostics', audioDiagnosticsFor(event.sender.id ?? 0))
+  }
+  ipcMain.handle('jensen:getAudioDiagnostics', event => audioDiagnosticsFor(event.sender.id ?? 0))
   ipcMain.handle('jensen:startRealtime', async (event, args) => {
     try {
       const realtimeDevice = getJensenDevice()
@@ -1177,6 +1183,7 @@ export function registerJensenHandlers(): void {
       liveSenders.set(owner, event.sender)
       const result = await audioSession.start(owner, options)
       if (!audioSession.owns(owner)) liveSenders.delete(owner)
+      pushAudioDiagnostics(event)
       return result
     } catch (error) {
       return { result: 'failed', error: error instanceof Error ? error.message : String(error) }
@@ -1200,6 +1207,7 @@ export function registerJensenHandlers(): void {
       return null
     } finally {
       if (!audioSession.owns(owner)) liveSenders.delete(owner)
+      pushAudioDiagnostics(event)
     }
   })
 

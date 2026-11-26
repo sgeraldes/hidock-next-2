@@ -12,9 +12,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { TitleBar } from '../TitleBar'
+import { mediaFloorPx } from '../HeaderMedia'
 import { useDeviceConnection } from '@/hooks/useDeviceConnection'
 
 vi.mock('@/hooks/useDeviceConnection', () => ({
@@ -119,6 +120,29 @@ describe('Integrated titlebar — ⌘K search shortcut', () => {
     const form = screen.getByRole('searchbox').closest('form')
     expect(form).toHaveClass('flex-1', 'min-w-[160px]')
     expect(form).not.toHaveClass('min-w-0')
+  })
+})
+
+describe('Integrated titlebar — search left, media right', () => {
+  it('puts the search first after the brand and the media area before the right cluster', () => {
+    renderBar()
+    const search = screen.getByRole('searchbox').closest('form')!
+    const media = screen.getByRole('region', { name: 'Media' })
+    const newMenu = screen.getByRole('button', { name: 'New' })
+    const notifications = screen.getByRole('button', { name: /notifications/i })
+    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(follows(search, newMenu)).toBe(true)
+    expect(follows(newMenu, media)).toBe(true)
+    expect(follows(media, notifications)).toBe(true)
+    // Left-aligned: the search no longer centres itself.
+    expect(search).not.toHaveClass('mx-auto')
+    // The media cell is a size container whose floor is what must always fit;
+    // the search keeps its own floor.
+    const cell = screen.getByTestId('header-media-cell')
+    expect(cell).toHaveClass('@container', 'flex-1')
+    expect(cell.style.minWidth).toBe(`${mediaFloorPx(false, false, false)}px`)
+    // Idle: the media area offers Record and nothing else.
+    expect(within(media).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Record'])
   })
 })
 

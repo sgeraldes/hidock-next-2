@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { NewMenu } from '@/components/layout/PcRecording'
+import { HeaderMedia } from '@/components/layout/HeaderMedia'
 import {
   Search,
   CheckCircle2,
@@ -48,10 +49,13 @@ import {
  * Layout (left → right):
  *  1. Brand cell — width == the sidebar width, so the app mark sits directly
  *     above the nav rail (see <Brand>). Swappable placement via the Brand prop.
- *  2. Centred global search (⌘K-style) — routes to Explore.
- *  3. Right cluster — 🔔 notifications, ⚡ activity, ⚙ settings, the device
+ *  2. Global search (⌘K-style) at the far left of the content column — routes
+ *     to Explore — then the New menu.
+ *  3. Media area (<HeaderMedia>) — what plays or records right now with its
+ *     controls, or the Record control when nothing does (owner, 26-nov-2026).
+ *  4. Right cluster — 🔔 notifications, ⚡ activity, ⚙ settings, the device
  *     status pill (all-states, incl. Restart), then the avatar → app menu.
- *  4. Native window controls (— ▢ ✕) — drawn by Electron in the reserved
+ *  5. Native window controls (— ▢ ✕) — drawn by Electron in the reserved
  *     NATIVE_CONTROLS_WIDTH gutter at the far right (inside this bar).
  *
  * The sidebar-collapse control does NOT live here — it's an edge-handle on the
@@ -165,11 +169,11 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
         <Brand placement="titlebar" collapsed={!sidebarOpen} onHome={() => navigate('/today')} />
       </div>
 
-      {/* CONTENT COLUMN — centred search + right cluster. */}
+      {/* CONTENT COLUMN — search at the far left, the media area on the right,
+          then the right cluster. */}
       <div className="flex h-full min-w-0 flex-1 items-center gap-2 pl-4 pr-3">
-        <NewMenu />
         {/* Global search — routes to Explore and keeps a measured 160px floor. */}
-        <form onSubmit={submitSearch} className="titlebar-no-drag mx-auto flex-1 max-w-md min-w-[160px]">
+        <form onSubmit={submitSearch} className="titlebar-no-drag flex-1 max-w-md min-w-[160px]">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
             <input
@@ -192,6 +196,12 @@ export function TitleBar({ sidebarOpen, dividerMode = BRAND_DIVIDER_MODE }: Titl
             </kbd>
           </div>
         </form>
+        <NewMenu />
+
+        {/* MEDIA AREA — what plays or records, or the Record control. A size
+            container that takes the free space between the search and the
+            right cluster; its floor (mediaFloorPx) is what must always fit. */}
+        <HeaderMedia />
 
         {/* RIGHT CLUSTER — a grouped rhythm rather than one uniform tiny gap: the
             notifications, activity and resource-monitor controls sit

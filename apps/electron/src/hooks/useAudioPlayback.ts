@@ -15,6 +15,7 @@ import { shouldLogQa } from '@/services/qa-monitor'
 import { connectStereoPlayback } from '@/lib/stereo-playback'
 import { currentPlayerPreferences } from '@/lib/player-preferences'
 import { queueAudioWork } from '@/utils/audioWorkQueue'
+import { pauseElementMedia } from '@/store/useMediaSessionStore'
 
 /**
  * H5: Try to load precomputed waveform peaks from the disk cache.
@@ -97,6 +98,9 @@ export function useAudioPlayback() {
 
   const playAudio = useCallback(async (recordingId: string, filePath: string, startTimeSec = 0, autoPlay = true) => {
     const generation = ++playbackGenerationRef.current
+    // One playback at a time: a page video or sample stops as soon as a
+    // recording is asked to play, before its bytes load.
+    if (autoPlay) pauseElementMedia({ endSession: true })
     // Keep a selected-row waveform request alive when the user presses Play
     // for that same recording. A different row still supersedes the old work.
     if (waveformPendingRecordingRef.current !== recordingId) waveformAbortControllerRef.current?.abort()
@@ -170,6 +174,8 @@ export function useAudioPlayback() {
 
           const handlePlay = () => {
             if (shouldLogQa()) console.log('[QA-MONITOR][Operation] Audio play event fired')
+            // Covers resume too: whatever a page started meanwhile stops.
+            pauseElementMedia({ endSession: true })
             setIsPlaying(true)
           }
 

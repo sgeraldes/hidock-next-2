@@ -4,8 +4,14 @@ Each entry is one day of merged work. The Releases page in Settings reads this f
 
 Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
 
-## 2026-11-26 | Fix times hears the words, on the Gamestation
+## 2026-11-26 | What plays or records, in the header; Fix times hears the words, on the Gamestation
 
+- The search moved to the far left of the header. The right side now shows what is playing or recording, with its controls.
+- A recording that plays shows its title, Play or Pause, a position bar, the elapsed and total time, a button that opens it (in the Library, or on its meeting page when it was started there) and Stop. A video from the Library and the speaker-review sample show the same controls.
+- Only one thing plays at a time anywhere in the app. Playing a recording pauses a video or sample that plays, and playing a video or sample stops the recording. The transcript player, find in the transcript and Fix times drive the same player, so the header always shows their position.
+- A recording on this PC shows a red dot, the elapsed time and Stop. A live session from the HiDock shows the same, named Live transcription or Live audio.
+- When nothing plays, the header offers Record: Record on this PC starts at once; Live transcription from the HiDock opens the Device page at its live controls, and says to connect the HiDock first when it is not connected. Record stays next to a playback when there is room for both. A recording that a find result only loaded, without playing it, does not take over the header.
+- The media area steps aside by the room it really has: first the title, then the position bar, the times and Open. Play or Pause, Stop and a recording's time and Stop always stay, and the search and the window buttons are never covered.
 - When the Model Host can do it, the timing warning offers "Fix times with Parakeet on the model host". It sends only the stretch of audio where the lines belong, with a second on each side, never the transcript. Parakeet on the Gamestation says when each word was heard, and each line is moved to where its own words are. A line whose words were not heard is placed in the gap between its neighbours, by its word count. A note under the button says how long the stretch is.
 - If the host is off, stepped aside for a game, still preparing Parakeet, slower than two minutes, or hears too few of the words, Fix times places the lines from the speech on this computer, as before. The computer-only button stays available next to the host's.
 - Each fixed range says how it was placed: from the words Parakeet heard on the model host, or from the speech stretches (or the loudness) on this computer. Undo works the same for both.
