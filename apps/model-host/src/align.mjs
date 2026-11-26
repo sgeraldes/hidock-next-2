@@ -8,6 +8,8 @@
  * Parakeet passed its spoken test and its runtime fingerprint still matches.
  */
 
+import { mkdtemp, rm } from 'fs/promises'
+import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { runDiarization } from './diarize.mjs'
@@ -32,12 +34,20 @@ export function parseAlignOutput(stdout) {
   return result
 }
 
-export function runAlignment(audio, options) {
+export async function runAlignment(audio, options) {
   const root = options.hostRoot || hostRoot()
   const worker = join(dirname(fileURLToPath(import.meta.url)), 'align_worker.py')
-  return runDiarization(audio, { ...options,
-    workerArgs: path => [worker, '--audio', path, '--worker-dir', dirname(options.workerPath),
-      '--model-dir', join(root, 'models', ONNX_ASR[ALIGN_MODEL].directory),
-      '--site-dir', join(root, 'runtime', 'asr-onnx', 'site')],
-    parseOutput: parseAlignOutput })
+  // The worker decodes the section into this folder. It is the host's to remove, so the
+  // decoded audio goes even when the worker is killed by a timeout or a cancel.
+  const scratch = await mkdtemp(join(tmpdir(), 'hidock-align-'))
+  try {
+    return await runDiarization(audio, { ...options,
+      workerArgs: path => [worker, '--audio', path, '--worker-dir', dirname(options.workerPath),
+        '--model-dir', join(root, 'models', ONNX_ASR[ALIGN_MODEL].directory),
+        '--site-dir', join(root, 'runtime', 'asr-onnx', 'site'), '--temp-dir', scratch],
+      parseOutput: parseAlignOutput })
+  } finally {
+    await rm(scratch, { recursive: true, force: true }).catch(error =>
+      console.error('[align] Could not remove the decoded section:', error.message))
+  }
 }

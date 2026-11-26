@@ -102,6 +102,14 @@ describe('alignLinesToWords', () => {
     expect(result.reason).toMatch(/do not fit/)
   })
 
+  it('refuses a line whose shortest length would end past the window (CodeRabbit review of #198)', () => {
+    const result = alignLinesToWords([{ text: 'hello' }], { start: 0, end: 1 }, [{ word: 'hello', start: 0.95, end: 1 }])
+    expect(result.ok).toBe(false)
+    const normal = alignLinesToWords([{ text: 'hello' }], { start: 0, end: 1 }, [{ word: 'hello', start: 0.3, end: 0.6 }])
+    expect(normal.ok).toBe(true)
+    expect(Math.max(...normal.ends)).toBeLessThanOrEqual(1)
+  })
+
   it('refuses a section too large to match in one go instead of stalling the main process', () => {
     const lines = Array.from({ length: 400 }, () => ({ text: 'una dos tres cuatro cinco seis siete ocho nueve diez' }))
     const words = Array.from({ length: 4000 }, (_, i) => ({ word: 'palabra', start: i * 0.2, end: i * 0.2 + 0.1 }))

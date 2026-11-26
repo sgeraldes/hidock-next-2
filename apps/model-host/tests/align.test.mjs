@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { EventEmitter } from 'events'
 import { mkdtemp, rm } from 'fs/promises'
+import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createHash } from 'crypto'
@@ -126,5 +127,25 @@ describe('runAlignment', () => {
     expect(args).toContain(join('C:', 'root', 'models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'))
     expect(args).toContain(join('C:', 'root', 'runtime', 'asr-onnx', 'site'))
     expect(args[args.indexOf('--worker-dir') + 1]).toBe(join('C:', 'host', 'resources'))
+  })
+
+  it('gives the worker a scratch folder it owns, and removes it even when the worker is killed (CodeRabbit review of #198)', async () => {
+    let scratch
+    const spawnFn = (_python, given) => {
+      scratch = given[given.indexOf('--temp-dir') + 1]
+      const child = new EventEmitter()
+      child.stdout = new EventEmitter(); child.stdout.setEncoding = () => {}
+      child.stderr = new EventEmitter(); child.stderr.setEncoding = () => {}
+      child.kill = () => { queueMicrotask(() => child.emit('close', null)) }
+      return child
+    }
+    const controller = new AbortController()
+    const run = runAlignment(Buffer.from('audio'), { pythonPath: 'py', workerPath: join('C:', 'w', 'worker.py'), hostRoot: join('C:', 'root'),
+      cpuPercent: 50, timeoutMs: 5000, spawnFn, signal: controller.signal })
+    await expect.poll(() => scratch).toBeTruthy()
+    expect(existsSync(scratch)).toBe(true)
+    controller.abort()
+    await expect(run).rejects.toThrow()
+    expect(existsSync(scratch)).toBe(false)
   })
 })

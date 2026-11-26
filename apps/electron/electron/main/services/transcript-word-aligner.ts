@@ -98,19 +98,24 @@ export function alignLinesToWords(lines: Array<{ text: string }>, window: Speech
   if (!m) return failed('The model host heard no words in this stretch of audio.')
   if ((n + 1) * (m + 1) > WORD_ALIGN_MAX_CELLS) return failed('This section is too long to match word by word in one go.')
 
-  // Each distinct word gets a number, and the cost of a pair of distinct words is worked out once.
-  const ids = new Map<string, number>()
-  const id = (text: string) => { let value = ids.get(text); if (value === undefined) { value = ids.size; ids.set(text, value) } return value }
-  const tIds = words.map((w) => id(w.text))
-  const hIds = heard.map((w) => id(w.text))
-  const texts = [...ids.keys()]
-  const pairCost = new Map<number, number>()
+  // Each distinct word on each side gets a number, and each pair's cost is worked out once into a
+  // byte table no larger than the cost matrix (at most WORD_ALIGN_MAX_CELLS bytes).
+  const numbering = (list: Array<{ text: string }>) => {
+    const ids = new Map<string, number>()
+    const of = list.map((w) => { let value = ids.get(w.text); if (value === undefined) { value = ids.size; ids.set(w.text, value) } return value })
+    return { of, texts: [...ids.keys()] }
+  }
+  const t = numbering(words)
+  const h = numbering(heard)
+  const tIds = t.of
+  const hIds = h.of
+  const COSTS = [0, COST_NEAR, COST_SUBSTITUTE]
+  const pairCost = new Int8Array(t.texts.length * h.texts.length).fill(-1)
   const costOf = (a: number, b: number): number => {
-    if (a === b) return 0
-    const pair = a * texts.length + b
-    let value = pairCost.get(pair)
-    if (value === undefined) { value = substitution(texts[a], texts[b]); pairCost.set(pair, value) }
-    return value
+    const cell = a * h.texts.length + b
+    let code = pairCost[cell]
+    if (code < 0) { code = COSTS.indexOf(substitution(t.texts[a], h.texts[b])); pairCost[cell] = code }
+    return COSTS[code]
   }
 
   // cost[i][j]: transcript words [0, i) against heard words [0, j), kept two rows at a time.
@@ -121,11 +126,11 @@ export function alignLinesToWords(lines: Array<{ text: string }>, window: Speech
   let above = new Float32Array(width)
   let row = new Float32Array(width)
   for (let i = 1; i <= n; i++) {
-    const t = tIds[i - 1]
+    const word = tIds[i - 1]
     row[0] = i * COST_UNHEARD
     move[i * width] = 1
     for (let j = 1; j <= m; j++) {
-      const diagonal = above[j - 1] + costOf(t, hIds[j - 1])
+      const diagonal = above[j - 1] + costOf(word, hIds[j - 1])
       const unheard = above[j] + COST_UNHEARD
       const extra = row[j - 1] + COST_EXTRA
       let best = diagonal
@@ -213,7 +218,8 @@ export function alignLinesToWords(lines: Array<{ text: string }>, window: Speech
 
   const strongLines = raw.filter((r) => r?.strong).length
   // Lines pushed past the window's end by the ones before them would all start at its end.
-  const fit = starts.every((s, k) => k === 0 || s >= starts[k - 1] + ALIGN_MIN_STEP_SECONDS - 1e-9)
+  const fit = starts.every((s, k) => k === 0 || s >= starts[k - 1] + ALIGN_MIN_STEP_SECONDS - 1e-9) &&
+    ends.every((e) => e <= window.end + 1e-9)
   const matchedEnough = confidence >= WORD_ALIGN_MIN_MATCH && strongLines >= Math.ceil(lines.length / 2)
   const ok = matchedEnough && fit
   return {

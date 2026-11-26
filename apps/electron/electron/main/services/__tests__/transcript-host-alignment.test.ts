@@ -69,6 +69,12 @@ describe('fixTimesOnModelHost', () => {
     expect(long.extract).not.toHaveBeenCalled()
   })
 
+  it('keeps a failing settings read or scratch folder inside the fallback (CodeRabbit review of #198)', async () => {
+    const d = deps({ settings: async () => { throw new Error('config unreadable') } })
+    expect(await fixTimesOnModelHost({ recordingId: 'rec-1', audioPath: 'a.hda', lines, window, durationSeconds: 600 }, d))
+      .toMatchObject({ used: false, reason: expect.stringMatching(/config unreadable/) })
+  })
+
   it('reports a failed section cut as a reason, not a crash', async () => {
     const d = deps({ extract: vi.fn(async () => { throw new Error('Section audio extraction exited 1') }) })
     expect(await fixTimesOnModelHost({ recordingId: 'rec-1', audioPath: 'a.hda', lines, window, durationSeconds: 600 }, d))

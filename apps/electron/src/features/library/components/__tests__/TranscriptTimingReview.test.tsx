@@ -141,8 +141,17 @@ describe('TranscriptTimingReview: Fix times on the model host', () => {
     reviewTiming.mockResolvedValue({ success: true, data: { fullText: 'x', segments: [], wordCount: 1 } })
     render(<Harness />)
     fireEvent.click(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' }))
-    expect(screen.getByText(/sends only this stretch of audio \(1 s\) to the model host/)).toBeInTheDocument()
+    expect(screen.getByText(/sends only this stretch of audio, about 3 s with a second on each side, to the model host/)).toBeInTheDocument()
     await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: hostRun.id, useHost: true }))
+  })
+
+  it('keeps the computer-only fix as its own choice when the host can align too (CodeRabbit review of #198)', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [{ ...odd, fix: { ...odd.fix!, hostEligible: true } }], wordAlignment: true }) })
+    reviewTiming.mockResolvedValue({ success: true, data: { fullText: 'x', segments: [], wordCount: 1 } })
+    render(<Harness />)
+    expect(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Fix times (from 0:04.9)' }))
+    await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: odd.id }))
   })
 
   it('keeps the computer-only button when no model host can place words', async () => {
@@ -165,7 +174,7 @@ describe('TranscriptTimingReview: Fix times on the model host', () => {
       { from: 0, to: 1, method: 'model-host-words' }, { from: 5, to: 5, method: 'vad' }, { from: 9, to: 9 }] }) })
     render(<Harness />)
     expect(await screen.findByText('Times fixed on lines 1 to 2, from the words Parakeet heard on the model host.')).toBeInTheDocument()
-    expect(screen.getByText('Times fixed on line 6, from the speech stretches on this computer (the model host was not used).')).toBeInTheDocument()
+    expect(screen.getByText('Times fixed on line 6, from the speech stretches on this computer.')).toBeInTheDocument()
     expect(screen.getByText('Times fixed on line 10.')).toBeInTheDocument()
   })
 })

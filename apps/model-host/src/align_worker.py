@@ -12,12 +12,15 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import tempfile
 import time
 
 from parakeet_worker import (ARTIFACT, MODEL, has_nonzero_samples, make_recognizer, model_files,
                              normalized_audio, silence_aware_windows)
 
 BOUNDARY = "\u2581"
+# sherpa-onnx 1.13 (the version Prepare-ASR pins) turns BOUNDARY into a space in the tokens it returns.
+BOUNDARY_MARKS = (BOUNDARY, " ")
 # A section is at most 15 minutes plus padding in HiDock; anything longer is not a section.
 MAX_ALIGN_SECONDS = 20 * 60
 # A token with no duration (no TDT durations from this sherpa build) is given this long.
@@ -38,7 +41,7 @@ def _has_letters(text: str) -> bool:
 def words_from_tokens(tokens, timestamps, durations, offset: float, limit: float) -> list[dict]:
     """Join sentencepiece tokens into words. Times move by offset and stay at or under limit."""
     if len(tokens) != len(timestamps):
-        raise ValueError("Recognizer returned tokens and timestamps of different lengths")
+        raise ValueError("Recognizer returned tokens without matching timestamps")
     has_durations = len(durations) == len(tokens) and any(d > 0 for d in durations)
     words: list[dict] = []
     current = None
@@ -51,13 +54,15 @@ def words_from_tokens(tokens, timestamps, durations, offset: float, limit: float
         else:
             end = start + LAST_TOKEN_SECONDS
         text = token.replace(BOUNDARY, "")
-        if current is None or token.startswith(BOUNDARY):
+        if current is None or token.startswith(BOUNDARY_MARKS):
             if current is not None:
                 words.append(current)
-            current = {"word": text, "start": start, "end": end}
+            current = {"word": text.lstrip(), "start": start, "end": end}
         else:
             current["word"] += text
-            current["end"] = max(current["end"], end)
+            # A punctuation token is not speech: it never moves where the word ends.
+            if _has_letters(text):
+                current["end"] = max(current["end"], end)
     if current is not None:
         words.append(current)
     result = []
@@ -76,7 +81,11 @@ def main() -> None:
     parser.add_argument("--worker-dir", required=True)
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--site-dir")
+    parser.add_argument("--temp-dir", help="Folder the host removes after this worker exits, even when killed")
     args = parser.parse_args()
+    if args.temp_dir:
+        # parakeet_worker.normalized_audio decodes into a TemporaryDirectory: put it where the host cleans up.
+        tempfile.tempdir = str(Path(args.temp_dir).resolve(strict=True))
     files = model_files(Path(args.model_dir), MODEL)
     output = sys.stdout
     sys.stdout = sys.stderr

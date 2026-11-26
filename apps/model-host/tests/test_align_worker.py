@@ -23,6 +23,15 @@ class WordsFromTokensTests(unittest.TestCase):
         self.assertAlmostEqual(words[1]["start"], 10.64)
         self.assertAlmostEqual(words[1]["end"], 11.04)
 
+    def test_sherpa_onnx_1_13_tokens_mark_a_new_word_with_a_leading_space(self):
+        # The pinned runtime turns the boundary mark into a space (CodeRabbit review of #198).
+        words = worker.words_from_tokens([" Hola", ",", " Ma", "nuel", "."], [1.0, 1.3, 5.0, 5.2, 5.5],
+                                         [0.2, 0.0, 0.2, 0.2, 0.0], offset=0.0, limit=10.0)
+        self.assertEqual([w["word"] for w in words], ["Hola,", "Manuel."])
+        self.assertAlmostEqual(words[0]["start"], 1.0)
+        self.assertAlmostEqual(words[1]["start"], 5.0)
+        self.assertAlmostEqual(words[1]["end"], 5.4)
+
     def test_without_durations_a_word_ends_where_the_next_begins(self):
         words = worker.words_from_tokens([B + "uno", B + "dos"], [1.0, 1.5], [], offset=0.0, limit=3.0)
         self.assertAlmostEqual(words[0]["end"], 1.5)

@@ -340,6 +340,7 @@ export function registerTranscriptsHandlers(): void {
           : lines.some((s) => hasInlineTurns(s.text))
           ? { used: false as const, reason: 'This line holds turns with their own times.' }
           : await fixTimesOnModelHost({ recordingId, audioPath: state.filePath, lines, window, durationSeconds: state.durationSeconds })
+            .catch((err: unknown) => ({ used: false as const, reason: `The model host attempt failed: ${safeErrorMessage(err)}` }))
         if (host.used) {
           review = { action, indices: finding.lines, alignment: host.alignment, method: 'model-host-words' }
         } else {

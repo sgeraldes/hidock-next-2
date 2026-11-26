@@ -40,9 +40,9 @@ export type TimingFixMethod = 'model-host-words' | 'vad' | 'envelope' | 'decoded
 
 export const TIMING_FIX_METHOD_LABELS: Record<TimingFixMethod, string> = {
   'model-host-words': 'from the words Parakeet heard on the model host',
-  vad: 'from the speech stretches on this computer (the model host was not used)',
-  envelope: 'from the loudness of the audio on this computer (the model host was not used)',
-  decoded: 'from the loudness of the audio on this computer (the model host was not used)'
+  vad: 'from the speech stretches on this computer',
+  envelope: 'from the loudness of the audio on this computer',
+  decoded: 'from the loudness of the audio on this computer'
 }
 
 export type TimingFindingKind = 'odd_line' | 'mistimed_run' | 'duplicate'

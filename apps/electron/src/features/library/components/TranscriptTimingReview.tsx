@@ -156,12 +156,13 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
               </Button>
               {current.originals && <Button size="sm" variant="ghost" disabled={busy} onClick={() => jump(current.originals![0])}>Go to the first copy</Button>}
             </> : <>
-              {hostFix && lowConfidence !== current.id ? (
+              {hostFix && lowConfidence !== current.id && (
                 <Button size="sm" variant="outline" disabled={busy}
                   onClick={() => act({ action: 'fix_times', findingId: current.id, useHost: true }, current.id)}>
                   Fix times with Parakeet on the model host
                 </Button>
-              ) : current.fix?.ok && current.fix.firstStart !== null && lowConfidence !== current.id && (
+              )}
+              {current.fix?.ok && current.fix.firstStart !== null && lowConfidence !== current.id && (
                 <Button size="sm" variant="outline" disabled={busy}
                   onClick={() => act({ action: 'fix_times', findingId: current.id }, current.id)}>
                   Fix times (from {preciseClock(current.fix.firstStart)})
@@ -181,7 +182,7 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
           </div>
           {hostFix && lowConfidence !== current.id && current.windowStart !== null && current.windowEnd !== null && (
             <p className="text-muted-foreground">
-              Fix times sends only this stretch of audio ({Math.max(1, Math.round(current.windowEnd - current.windowStart))} s) to the model host, where Parakeet hears the words; the transcript stays here.
+              Fix times with Parakeet sends only this stretch of audio, about {Math.round(current.windowEnd - current.windowStart + 2)} s with a second on each side, to the model host, where Parakeet hears the words; the transcript stays here.
               If the host does not answer, the times come from the speech on this computer.
             </p>
           )}

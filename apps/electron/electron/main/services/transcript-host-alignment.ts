@@ -63,18 +63,15 @@ const defaultDeps: HostFixDeps = {
   store: memoryJobStore
 }
 
+/** Never throws: every failure is a reason, and the caller places the lines on this computer. */
 export async function fixTimesOnModelHost(input: HostFixInput, deps: HostFixDeps = defaultDeps): Promise<HostFixOutcome> {
-  const settings = await deps.settings()
-  if (!settings) return { used: false, reason: 'This computer is not paired with a model host.' }
-  if (!input.audioPath || !deps.audioExists(input.audioPath)) return { used: false, reason: 'The audio file is not on this computer.' }
-  let bounds: { start: number; seconds: number }
+  let dir: string | null = null
   try {
-    bounds = sectionBounds(input.window.start, input.window.end, input.durationSeconds)
-  } catch (err) {
-    return { used: false, reason: err instanceof Error ? err.message : String(err) }
-  }
-  const dir = await mkdtemp(join(tmpdir(), 'hidock-align-'))
-  try {
+    const settings = await deps.settings()
+    if (!settings) return { used: false, reason: 'This computer is not paired with a model host.' }
+    if (!input.audioPath || !deps.audioExists(input.audioPath)) return { used: false, reason: 'The audio file is not on this computer.' }
+    const bounds = sectionBounds(input.window.start, input.window.end, input.durationSeconds)
+    dir = await mkdtemp(join(tmpdir(), 'hidock-align-'))
     const clip = join(dir, 'section.wav')
     await deps.extract(input.audioPath, bounds.start, bounds.seconds, clip)
     const answer = await deps.align(clip, settings, { timeoutMs: HOST_ALIGN_TIMEOUT_MS, recordingId: input.recordingId, store: await deps.store(input.recordingId) })
@@ -85,7 +82,11 @@ export async function fixTimesOnModelHost(input: HostFixInput, deps: HostFixDeps
   } catch (err) {
     return { used: false, reason: err instanceof Error ? err.message : String(err) }
   } finally {
-    // Only this invocation's own temporary directory.
-    await rm(dir, { recursive: true, force: true })
+    // Only this invocation's own temporary directory. A failed removal is logged; it never
+    // replaces the outcome (CodeRabbit review of #198).
+    if (dir) {
+      await rm(dir, { recursive: true, force: true }).catch((err: unknown) =>
+        console.warn('[TranscriptTiming] Could not remove the section sent to the model host:', err instanceof Error ? err.message : err))
+    }
   }
 }

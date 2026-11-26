@@ -310,6 +310,14 @@ describe('timing review persistence', () => {
     expect(stored()!.segments[0]).toMatchObject({ start: 4.9, end: 5.6, timingOriginalStart: 494.8, timingFixMethod: 'model-host-words' })
   })
 
+  it('still fixes on this computer when the host attempt itself throws (CodeRabbit review of #198)', async () => {
+    fixTimesOnModelHost.mockRejectedValue(new Error('EPERM: scratch folder'))
+    registerTranscriptsHandlers()
+    const result = await handlerFor('transcripts:reviewTiming')?.({} as never, { recordingId: 'rec-1', fingerprint, action: 'fix_times', findingId: 'odd_line:0-0', useHost: true }) as any
+    expect(result.success).toBe(true)
+    expect(stored()!.segments[0]).toMatchObject({ timingFixMethod: 'vad' })
+  })
+
   it('sends no audio to the host unless the owner pressed the host button (Kiro review of #198)', async () => {
     fixTimesOnModelHost.mockResolvedValue({ used: true, modelVersion: 'parakeet', alignment: { ok: true, starts: [4.9], ends: [5.6], confidence: 1, method: 'model-host-words' } })
     registerTranscriptsHandlers()
