@@ -16,6 +16,24 @@ import { existsSync, rmSync } from 'fs'
 import Database from 'better-sqlite3'
 import { DatabaseEngine, getTableColumns } from '../src/index.js'
 
+// The durable-table tests see the engine open and sync the WAL file itself.
+const fsLog = vi.hoisted(() => ({ current: null as string[] | null }))
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>()
+  return {
+    ...actual,
+    openSync: ((...args: Parameters<typeof actual.openSync>) => {
+      const fd = actual.openSync(...args)
+      if (fsLog.current && String(args[0]).endsWith('-wal')) fsLog.current.push('open wal')
+      return fd
+    }) as typeof actual.openSync,
+    fsyncSync: ((fd: number) => {
+      fsLog.current?.push('fsync')
+      return actual.fsyncSync(fd)
+    }) as typeof actual.fsyncSync,
+  }
+})
+
 function tempDbPath(name: string): string {
   // Stable per-test path (no Date.now/Math.random — keep deterministic)
   const p = join(tmpdir(), `hidock-db-engine-test-${name}.sqlite`)
@@ -503,21 +521,48 @@ describe('DatabaseEngine', () => {
 
     // SQLite refuses to change the sync level inside a transaction. A durable
     // write inside a transaction that did not declare itself still reaches
-    // the disk: after its COMMIT a checkpoint syncs the WAL first.
-    it('syncs the WAL after an ordinary transaction that wrote a durable table, also nested', async () => {
+    // the disk: after its COMMIT the engine syncs the WAL file itself. A
+    // checkpoint would not do: it syncs nothing when a reader's snapshot
+    // leaves it no frame to copy (kiro review of this branch).
+    it('syncs the WAL file after an ordinary transaction that wrote a durable table, also nested', async () => {
       const log: string[] = []
       const engine = makeEngine('durable-nested', { durableTables: ['items'], betterSqlite3: recordingDriver(log) })
       await engine.initialize()
+      fsLog.current = log
       try {
         log.length = 0
         engine.runInTransaction(() => engine.runInTransaction(() => engine.runNoSave("INSERT INTO items (id, name) VALUES ('a', 'A')")))
-        expect(log).toEqual(['COMMIT', 'wal_checkpoint(PASSIVE)'])
+        expect(log).toEqual(['COMMIT', 'open wal', 'fsync'])
         log.length = 0
         // Declared inside an ordinary transaction: same.
         engine.runInTransaction(() => engine.runDurableTransaction(() => engine.run("UPDATE items SET name = 'B' WHERE id = 'a'")))
-        expect(log).toEqual(['COMMIT', 'wal_checkpoint(PASSIVE)'])
+        expect(log).toEqual(['COMMIT', 'open wal', 'fsync'])
         expect(engine.queryOne<{ name: string }>("SELECT name FROM items WHERE id = 'a'")?.name).toBe('B')
-      } finally { engine.closeDatabase() }
+      } finally {
+        fsLog.current = null
+        engine.closeDatabase()
+      }
+    })
+
+    it('syncs the WAL file even while a reader pins the WAL', async () => {
+      const log: string[] = []
+      const engine = makeEngine('durable-pinned', { durableTables: ['items'], betterSqlite3: recordingDriver(log) })
+      await engine.initialize()
+      const path = paths[paths.length - 1]
+      const reader = new Database(path, { readonly: true })
+      fsLog.current = log
+      try {
+        reader.exec('BEGIN')
+        reader.prepare('SELECT COUNT(*) FROM items').get()
+        log.length = 0
+        engine.runInTransaction(() => engine.run("INSERT INTO items (id, name) VALUES ('p', 'P')"))
+        expect(log).toEqual(['COMMIT', 'open wal', 'fsync'])
+      } finally {
+        fsLog.current = null
+        reader.exec('COMMIT')
+        reader.close()
+        engine.closeDatabase()
+      }
     })
 
     it('leaves other writes, reads and a rolled-back durable write at NORMAL', async () => {

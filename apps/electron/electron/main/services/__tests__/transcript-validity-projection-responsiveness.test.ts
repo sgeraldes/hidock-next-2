@@ -71,8 +71,12 @@ describe('full library projection', () => {
       let worstHoldMs = 0
       let last = performance.now()
       const heartbeat = setInterval(() => { const now = performance.now(); worstHoldMs = Math.max(worstHoldMs, now - last); last = now }, 0)
-      const [first, concurrent] = await Promise.all([backfillTranscriptValidity(), backfillTranscriptValidity()])
-      clearInterval(heartbeat)
+      // Cleared on a throw too, so it never runs into the retry's measurement.
+      let passes: Awaited<ReturnType<typeof backfillTranscriptValidity>>[]
+      try {
+        passes = await Promise.all([backfillTranscriptValidity(), backfillTranscriptValidity()])
+      } finally { clearInterval(heartbeat) }
+      const [first, concurrent] = passes
       console.log(`2140-row projection worst hold: ${first.worstHoldMs}ms; heartbeat: ${worstHoldMs}ms`)
       writeFileSync(join(tmpdir(), 'f3-projection-hold.json'), JSON.stringify({ worstHoldMs: first.worstHoldMs, heartbeatMs: worstHoldMs }))
       expect(first.checked).toBe(2140)

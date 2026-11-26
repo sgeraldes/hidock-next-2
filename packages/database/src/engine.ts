@@ -1480,10 +1480,20 @@ export class DatabaseEngine {
     }
   }
 
+  /** fsync the WAL file through a handle of its own: every committed frame is then on disk. */
+  private syncWalFile(): void {
+    const fd = openSync(`${this.dbPath}-wal`, 'r+')
+    try {
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+  }
+
   /**
    * A transaction whose COMMIT must survive a power cut (deletions and their
    * journal): it runs with synchronous FULL. Inside an ordinary transaction it
-   * joins it, and that transaction's COMMIT is synced afterwards (see
+   * joins it, and the WAL file is synced after that transaction's COMMIT (see
    * runInTransaction).
    */
   runDurableTransaction<T>(fn: () => T): T {
@@ -1548,12 +1558,12 @@ export class DatabaseEngine {
       if (this.durableCommit && !this.fullSyncActive) {
         // A durable table was written in a transaction that did not declare
         // itself (runDurableTransaction), and SQLite cannot raise the sync
-        // level inside one. Under NORMAL a checkpoint syncs the WAL before it
-        // copies, which makes this commit durable.
+        // level inside one. The COMMIT is in the WAL file; syncing that file
+        // makes it durable. A checkpoint would not: it syncs nothing when a
+        // reader's snapshot leaves it no frame to copy.
         this.durableCommit = false
         try {
-          bdb.pragma('wal_checkpoint(PASSIVE)')
-          this.checkpointCount++
+          this.syncWalFile()
         } catch (e) {
           // The COMMIT stands; only its sync is in doubt. Say so, do not fail it.
           console.warn('[Database] Could not sync the WAL after a durable write:', (e as Error).message)
