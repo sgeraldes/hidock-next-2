@@ -73,9 +73,12 @@ describe('DatabaseEngine', () => {
     protectedTables?: string[]
     vacuumAfterMigration?: boolean
     vacuumMinReclaimBytes?: number
+    durableTables?: string[]
+    betterSqlite3?: typeof Database
   }) {
     return {
-      betterSqlite3: Database,
+      betterSqlite3: opts.betterSqlite3 ?? Database,
+      durableTables: opts.durableTables,
       dbPathProvider: () => opts.path,
       schemaVersion: opts.schemaVersion ?? 1,
       schema: SCHEMA,
@@ -446,6 +449,104 @@ describe('DatabaseEngine', () => {
     ).toThrow('boom')
     expect(engine.queryOne('SELECT * FROM items WHERE id = ?', ['t2'])).toBeUndefined()
     engine.closeDatabase()
+  })
+
+  // WAL with synchronous NORMAL loses at most the last transactions on power
+  // loss, never the file. A write to a durable table (the app's deletion
+  // journal and purge ledger) must not be among them: its COMMIT syncs.
+  describe('durableTables', () => {
+    /** better-sqlite3 that records synchronous changes and COMMITs in order. */
+    function recordingDriver(log: string[]): typeof Database {
+      return class extends Database {
+        pragma(source: string, options?: Database.PragmaOptions): unknown {
+          if (/^(synchronous\s*=|wal_checkpoint)/.test(source)) log.push(source.replace(/\s+/g, ' '))
+          return super.pragma(source, options)
+        }
+        exec(source: string): this {
+          if (source === 'COMMIT') log.push('COMMIT')
+          return super.exec(source)
+        }
+      } as unknown as typeof Database
+    }
+
+    it('runDurableTransaction commits with synchronous FULL, then returns to NORMAL', async () => {
+      const log: string[] = []
+      const engine = makeEngine('durable-tx', { durableTables: ['items'], betterSqlite3: recordingDriver(log) })
+      await engine.initialize()
+      try {
+        log.length = 0
+        expect(engine.runDurableTransaction(() => {
+          engine.run("INSERT INTO items (id, name) VALUES ('a', 'A')")
+          return 'done'
+        })).toBe('done')
+        expect(log).toEqual(['synchronous = FULL', 'COMMIT', 'synchronous = NORMAL'])
+        expect(engine.queryOne('PRAGMA synchronous')).toEqual({ synchronous: 1 })
+        // A rollback restores NORMAL too.
+        log.length = 0
+        expect(() => engine.runDurableTransaction(() => { throw new Error('no') })).toThrow('no')
+        expect(log).toEqual(['synchronous = FULL', 'synchronous = NORMAL'])
+      } finally { engine.closeDatabase() }
+    })
+
+    it('syncs an autocommit write to a durable table', async () => {
+      const log: string[] = []
+      const engine = makeEngine('durable-auto', { durableTables: ['items'], betterSqlite3: recordingDriver(log) })
+      await engine.initialize()
+      try {
+        log.length = 0
+        engine.run("INSERT INTO items (id, name) VALUES ('a', 'A')")
+        engine.runMany('INSERT INTO items (id, name) VALUES (?, ?)', [['b', 'B']])
+        expect(log).toEqual(['synchronous = FULL', 'synchronous = NORMAL', 'synchronous = FULL', 'synchronous = NORMAL'])
+        expect(engine.queryOne('PRAGMA synchronous')).toEqual({ synchronous: 1 })
+      } finally { engine.closeDatabase() }
+    })
+
+    // SQLite refuses to change the sync level inside a transaction. A durable
+    // write inside a transaction that did not declare itself still reaches
+    // the disk: after its COMMIT a checkpoint syncs the WAL first.
+    it('syncs the WAL after an ordinary transaction that wrote a durable table, also nested', async () => {
+      const log: string[] = []
+      const engine = makeEngine('durable-nested', { durableTables: ['items'], betterSqlite3: recordingDriver(log) })
+      await engine.initialize()
+      try {
+        log.length = 0
+        engine.runInTransaction(() => engine.runInTransaction(() => engine.runNoSave("INSERT INTO items (id, name) VALUES ('a', 'A')")))
+        expect(log).toEqual(['COMMIT', 'wal_checkpoint(PASSIVE)'])
+        log.length = 0
+        // Declared inside an ordinary transaction: same.
+        engine.runInTransaction(() => engine.runDurableTransaction(() => engine.run("UPDATE items SET name = 'B' WHERE id = 'a'")))
+        expect(log).toEqual(['COMMIT', 'wal_checkpoint(PASSIVE)'])
+        expect(engine.queryOne<{ name: string }>("SELECT name FROM items WHERE id = 'a'")?.name).toBe('B')
+      } finally { engine.closeDatabase() }
+    })
+
+    it('leaves other writes, reads and a rolled-back durable write at NORMAL', async () => {
+      const log: string[] = []
+      const engine = makeEngine('durable-other', { durableTables: ['deletion_journal'], betterSqlite3: recordingDriver(log) })
+      await engine.initialize()
+      try {
+        log.length = 0
+        engine.runInTransaction(() => engine.run("INSERT INTO items (id, name) VALUES ('a', 'A')"))
+        engine.run("UPDATE items SET name = 'deletion_journalish' WHERE id = 'a'")
+        engine.queryAll('SELECT * FROM items')
+        expect(log).toEqual(['COMMIT'])
+      } finally { engine.closeDatabase() }
+
+      const log2: string[] = []
+      const durable = makeEngine('durable-rollback', { durableTables: ['items'], betterSqlite3: recordingDriver(log2) })
+      await durable.initialize()
+      try {
+        log2.length = 0
+        expect(() => durable.runInTransaction(() => {
+          durable.run("INSERT INTO items (id, name) VALUES ('x', 'X')")
+          throw new Error('abandon')
+        })).toThrow('abandon')
+        // Rolled back, nothing to sync; the next transaction, which writes
+        // no durable table, is not synced either.
+        durable.runInTransaction(() => durable.queryAll('SELECT * FROM items'))
+        expect(log2).toEqual(['COMMIT'])
+      } finally { durable.closeDatabase() }
+    })
   })
 
   it('runMany inserts every row', async () => {

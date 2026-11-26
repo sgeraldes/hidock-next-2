@@ -4559,6 +4559,11 @@ const engine = new DatabaseEngine({
   // three daily backups plus three independently retained migration restore points.
   // Intentional bulk purges use runWithMassDeleteAllowed().
   protectedTables: ['knowledge_captures', 'transcripts', 'recordings', 'meetings', 'contacts'],
+  // WAL with synchronous NORMAL: a power cut can lose the last commits, never
+  // the file. A deletion, its journal row and the purge tombstones that keep a
+  // purged file from coming back must not be among them; their commits are
+  // synced (the deletion paths declare it with runDurableTransaction).
+  durableTables: ['deletion_journal', 'purged_files'],
   backupOnBoot: { keep: 3 },
   backupExecutor: runDatabaseBackup,
   deferBackupOnBoot: true,
@@ -4771,6 +4776,15 @@ export function runNoSave(sql: string, params: any[] = []): void {
  */
 export function runInTransaction<T>(fn: () => T): T {
   return engine.runInTransaction(fn)
+}
+
+/**
+ * A transaction whose COMMIT is synced to disk (synchronous FULL): deletions
+ * and the deletion journal. Everything else commits at NORMAL, which can lose
+ * the last commits on a power cut but never corrupts the file.
+ */
+export function runDurableTransaction<T>(fn: () => T): T {
+  return engine.runDurableTransaction(fn)
 }
 
 export function runMany(sql: string, items: any[][]): void {
@@ -6297,7 +6311,7 @@ export function deleteRecordingCascade(
 
   if (!opts.hard) {
     const now = new Date().toISOString()
-    runInTransaction(() => {
+    runDurableTransaction(() => {
       runNoSave('UPDATE recordings SET deleted_at = ? WHERE id = ?', [now, recordingId])
       removeRecordingVoiceEvidenceNoSave(recordingId)
       // Stop any in-flight/queued transcription for a hidden recording.
@@ -6329,7 +6343,7 @@ export function deleteRecordingCascade(
   // tripwire (deletes hit protected tables like transcripts/knowledge_captures)
   // for this scoped operation only.
   return runWithMassDeleteAllowed(() =>
-    runInTransaction((): RecordingDeletionResult => {
+    runDurableTransaction((): RecordingDeletionResult => {
       const captureIds = getCaptureIdsForRecording(recordingId)
       const capPlaceholders = captureIds.map(() => '?').join(',')
 
@@ -6899,7 +6913,7 @@ export function restoreRecording(recordingId: string): boolean {
   )
   if (!rec || !rec.deleted_at) return false
   const now = new Date().toISOString()
-  runInTransaction(() => {
+  runDurableTransaction(() => {
     runNoSave('UPDATE recordings SET deleted_at = NULL WHERE id = ?', [recordingId])
     runNoSave(
       `UPDATE deletion_journal SET restored_at = ?
@@ -7242,7 +7256,7 @@ export function commitRecordingSplit(recordingId: string, children: RecordingSpl
   if (!parent || parent.deleted_at) throw new Error('The source recording is unavailable')
   const now = new Date().toISOString()
 
-  runInTransaction(() => {
+  runDurableTransaction(() => {
     for (const child of children) {
       runNoSave(
         `INSERT INTO recordings (id, filename, original_filename, file_path, file_size,

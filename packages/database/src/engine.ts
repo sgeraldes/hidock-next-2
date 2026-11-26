@@ -536,6 +536,16 @@ export interface DatabaseEngineConfig {
   betterSqlite3: BetterSqlite3Constructor
   /** Lock wait budget for this connection; telemetry uses a short main-process budget. */
   busyTimeoutMs?: number
+  /**
+   * Tables whose writes must survive a power cut. The connection runs WAL with
+   * `synchronous = NORMAL`: a commit is not synced, and a power cut can lose the
+   * last transactions (never the file, never a committed checkpoint). A
+   * transaction that writes one of these tables through run/runNoSave/runMany
+   * commits with `synchronous = FULL` instead, and an autocommit write to one
+   * runs with it; the connection goes back to NORMAL afterwards. Writes through
+   * the sql.js facade (getDatabase().run) are not detected.
+   */
+  durableTables?: string[]
   /** @deprecated ignored — retained for source-compat with the sql.js engine. */
   initSqlJs?: unknown
   /** Returns the absolute path to the .sqlite file (resolved at init time). */
@@ -629,8 +639,10 @@ const BYTES_PER_MB = 1024 * 1024
  *  2. Every migration run writes a schema_migration_audit row.
  *  3. The snapshot and its partial copy use short, namespaced paths, so a data
  *     folder close to MAX_PATH still gets a verified snapshot.
+ *  4. Writes to `durableTables` (the app's deletion journal and purge ledger)
+ *     are synced on commit, while everything else stays at synchronous NORMAL.
  */
-export const ENGINE_SAFETY_VERSION = 3
+export const ENGINE_SAFETY_VERSION = 4
 
 /** A namespaced Windows path (\\?\C:\... or \\?\UNC\host\...) in its ordinary form. */
 /**
@@ -701,6 +713,11 @@ export class DatabaseEngine {
   private shim: SqlJsCompatDatabase | null = null
   private dbPath = ''
   private inTransaction = false
+  /** The open transaction wrote a durable table: its COMMIT must be synced. */
+  private durableCommit = false
+  /** synchronous FULL is set for the statement or transaction running now. */
+  private fullSyncActive = false
+  private durableTablePattern: RegExp | null | undefined
   private lastChanges = 0
   private appliedMigration = false
   /** What the last boot decided about the post-migration VACUUM (for logs and tests). */
@@ -1436,7 +1453,62 @@ export class DatabaseEngine {
     return this.getBdb().prepare(sql).get(...normalizeParams(params)) as T | undefined
   }
 
+  /** Whether `sql` names one of config.durableTables (as a whole word). */
+  private writesDurableTable(sql: string): boolean {
+    if (this.durableTablePattern === undefined) {
+      const names = (this.config.durableTables ?? []).filter((n) => /^\w+$/.test(n))
+      this.durableTablePattern = names.length > 0 ? new RegExp(`\\b(?:${names.join('|')})\\b`, 'i') : null
+    }
+    return this.durableTablePattern !== null && this.durableTablePattern.test(sql)
+  }
+
+  /**
+   * Run `fn` with synchronous FULL on this connection, then restore what was
+   * set. Only outside a transaction: SQLite refuses the change inside one.
+   */
+  private withFullSync<T>(fn: () => T): T {
+    const bdb = this.getBdb()
+    const previous = Number(bdb.pragma('synchronous', { simple: true }))
+    if (previous >= 2) return fn()
+    bdb.pragma('synchronous = FULL')
+    this.fullSyncActive = true
+    try {
+      return fn()
+    } finally {
+      this.fullSyncActive = false
+      bdb.pragma(previous === 0 ? 'synchronous = OFF' : 'synchronous = NORMAL')
+    }
+  }
+
+  /**
+   * A transaction whose COMMIT must survive a power cut (deletions and their
+   * journal): it runs with synchronous FULL. Inside an ordinary transaction it
+   * joins it, and that transaction's COMMIT is synced afterwards (see
+   * runInTransaction).
+   */
+  runDurableTransaction<T>(fn: () => T): T {
+    if (this.inTransaction) {
+      this.durableCommit = true
+      return fn()
+    }
+    return this.withFullSync(() => this.runInTransaction(fn))
+  }
+
+  /** A write to a durable table: mark the open transaction, or sync this statement. */
+  private durableWrite<T>(sql: string, write: () => T): T {
+    if (!this.writesDurableTable(sql)) return write()
+    if (this.inTransaction) {
+      this.durableCommit = true
+      return write()
+    }
+    return this.withFullSync(write)
+  }
+
   private execWrite(sql: string, params: unknown[]): void {
+    this.durableWrite(sql, () => this.execWriteNow(sql, params))
+  }
+
+  private execWriteNow(sql: string, params: unknown[]): void {
     const norm = normalizeParams(params)
     try {
       const info = this.getBdb().prepare(sql).run(...norm)
@@ -1468,10 +1540,25 @@ export class DatabaseEngine {
       return fn()
     }
     this.inTransaction = true
+    this.durableCommit = false
     bdb.exec('BEGIN')
     try {
       const result = fn()
       bdb.exec('COMMIT')
+      if (this.durableCommit && !this.fullSyncActive) {
+        // A durable table was written in a transaction that did not declare
+        // itself (runDurableTransaction), and SQLite cannot raise the sync
+        // level inside one. Under NORMAL a checkpoint syncs the WAL before it
+        // copies, which makes this commit durable.
+        this.durableCommit = false
+        try {
+          bdb.pragma('wal_checkpoint(PASSIVE)')
+          this.checkpointCount++
+        } catch (e) {
+          // The COMMIT stands; only its sync is in doubt. Say so, do not fail it.
+          console.warn('[Database] Could not sync the WAL after a durable write:', (e as Error).message)
+        }
+      }
       return result
     } catch (error) {
       try {
@@ -1482,13 +1569,14 @@ export class DatabaseEngine {
       throw error
     } finally {
       this.inTransaction = false
+      this.durableCommit = false
     }
   }
 
   runMany(sql: string, items: unknown[][]): void {
     const stmt = this.getBdb().prepare(sql)
     for (const item of items) {
-      const info = stmt.run(...normalizeParams(item))
+      const info = this.durableWrite(sql, () => stmt.run(...normalizeParams(item)))
       this.lastChanges = info.changes
     }
   }
