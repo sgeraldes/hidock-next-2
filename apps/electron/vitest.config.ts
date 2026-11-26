@@ -55,7 +55,7 @@ export default defineConfig({
         test: {
           name: 'main-db',
           include: ['electron/**/__tests__/**/*.test.ts', 'electron/**/__tests__/**/*.test.tsx'],
-          exclude: [...configDefaults.exclude, '**/*.smoke.test.ts'],
+          exclude: [...configDefaults.exclude, '**/*.smoke.test.ts', '**/*-responsiveness.test.ts'],
           setupFiles: ['./src/test/setup.ts', './src/test/setup-db.ts'],
           // Many main-db files run initializeDatabase() in beforeAll/beforeEach.
           // That's sub-second warm, but on cold or starved CI runners it blows
@@ -71,6 +71,24 @@ export default defineConfig({
           // "Test timed out in 5000ms" and both passing locally. A test that
           // genuinely hangs still fails; it just stops being a coin flip.
           testTimeout: 30000
+        }
+      },
+      {
+        extends: true,
+        test: {
+          // The 2,150-transcript fixtures that time the longest main-thread
+          // hold. Each seeds a 250 MB library and works it for a minute; two of
+          // them on two workers contend for the disk and CPU and measure each
+          // other: on 25-nov origin/main's own pair failed that way (RAG 4 holds
+          // over 100 ms, validity 1,520 ms) and passed alone. So they run after
+          // every other project, one file at a time.
+          name: 'responsiveness',
+          include: ['electron/**/__tests__/**/*-responsiveness.test.ts'],
+          setupFiles: ['./src/test/setup.ts', './src/test/setup-db.ts'],
+          hookTimeout: 60000,
+          testTimeout: 30000,
+          maxWorkers: 1,
+          sequence: { groupOrder: 1 }
         }
       },
       {

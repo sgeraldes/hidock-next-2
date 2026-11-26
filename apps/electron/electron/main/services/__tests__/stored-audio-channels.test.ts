@@ -49,8 +49,11 @@ it.each([
   const source = join(folder, `existing-${extension}.wav`)
   const encoded = join(folder, `existing.${extension}`)
   writeFileSync(source, wav(2))
+  // Fixture setup, not the code under test: a 2 s encode. Under a full suite
+  // on a busy Windows machine the spawn alone passed 10 s (ETIMEDOUT, 26-nov),
+  // so it gets most of the main-db project's 30 s test budget.
   execFileSync(ffmpegPath!, ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-i', source,
-    '-c:a', codec, '-y', encoded], { windowsHide: true, timeout: 10000 })
+    '-c:a', codec, '-y', encoded], { windowsHide: true, timeout: 25000 })
   const prepared = await prepareStoredAudioChannels(encoded, folder)
   try {
     expect(prepared.layout).toMatchObject({ container, channels: 2 })
