@@ -1696,7 +1696,8 @@ export function Device() {
 
           {/* Live transport availability is checked by the model/firmware owner. */}
           {deviceState.connected && (
-            <Card>
+            // The header's Record menu scrolls here (HeaderMedia: LIVE_SECTION_ID).
+            <Card id="device-live-streaming" tabIndex={-1} className="scroll-mt-4 focus:outline-hidden">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Radio className="h-5 w-5" />

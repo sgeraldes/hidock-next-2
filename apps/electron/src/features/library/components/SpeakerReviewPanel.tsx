@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { useExclusiveMedia } from '@/hooks/useExclusiveMedia'
 import type { RepairAction, RepairContext } from '@/shared/quality-repair'
 
 type Context = RepairContext
@@ -21,6 +22,8 @@ export function SpeakerReviewPanel({ recordingId }: { recordingId: string }) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  // One playback at a time: the sample stops the recording and shows in the header.
+  const sampleRef = useExclusiveMedia({ kind: 'audio', title: 'Speaker sample', sourceId: recordingId })
   const [advice, setAdvice] = useState<{ action: RepairAction; confidence?: { action: number | null }; model: string } | null>(null)
   const intent = useRef<string | null>(null)
   const generation = useRef(0)
@@ -133,7 +136,7 @@ export function SpeakerReviewPanel({ recordingId }: { recordingId: string }) {
             {' '}The audio includes surrounding turns, starting at {Math.floor(sample.context.start)} s.</p>
           {sample.referenceSuitability === 'short-reference' && <p className="text-amber-500">This target is very short. It is not a reliable reference for automatically identifying an entire voice.</p>}
           {sample.referenceSuitability === 'sparse-time-span' && <p className="text-amber-500">Few words span a long interval. Review timing and surrounding audio before interpreting this as a voice error.</p>}
-          <audio controls preload="metadata" src={audioUrl} className="w-full" aria-label="Speaker sample with surrounding context" />
+          <audio ref={sampleRef} controls preload="metadata" src={audioUrl} className="w-full" aria-label="Speaker sample with surrounding context" />
           <p>Who speaks in the target passage? This answer applies only to this interval.</p>
           <div className="flex flex-wrap gap-2">{([
             ['owner', 'Me'], ['other', 'Other participant'], ['overlap', 'Both speaking'], ['unsure', 'Not sure']
