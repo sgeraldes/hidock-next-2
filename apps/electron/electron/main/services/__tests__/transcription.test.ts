@@ -2093,6 +2093,15 @@ vi.mock('../provider-checkpoints', () => ({
 it('warns once per session and leaves the queue paused when Gemini has no key', async () => {
   mockConfig.transcription.provider = 'gemini'
   mockConfig.transcription.geminiApiKey = ''
+  mockGetQueueItems.mockReturnValue([])
+  // Hermetic: a fresh module, so the once-per-session flag is not already
+  // spent by an earlier test, and no Gemini key from the machine's credential
+  // store (a developer's brains.json) can make the key look configured.
+  vi.resetModules()
+  vi.doMock('../brains/brain-credential-store', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../brains/brain-credential-store')>()),
+    getBrainCredentialStore: () => ({ getSecret: () => null })
+  }))
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
   const { processQueueManually, getQueueState } = await import('../transcription')
@@ -2103,4 +2112,5 @@ it('warns once per session and leaves the queue paused when Gemini has no key', 
   expect(getQueueState().pauseReason).toBe('no_gemini_key')
   expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[1] === 'failed')).toBe(false)
   warn.mockRestore(); error.mockRestore()
+  vi.doUnmock('../brains/brain-credential-store')
 })
