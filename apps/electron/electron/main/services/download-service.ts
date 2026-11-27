@@ -51,6 +51,7 @@ import { profileNewRecording } from './audio-profile-store'
 import type { DeviceSnapshotGuard } from './device-snapshot'
 import { deviceListGuard } from './device-snapshot'
 import { isNativeFileManualOnly } from './device-native-file-policy'
+import { getJensenDevice } from './jensen'
 
 /** isFileAlreadySynced: a same-stem external import does not stand for device audio. */
 const INDEPENDENT_IMPORT_REASON = 'Independent local import is not device audio'
@@ -1968,7 +1969,6 @@ export function registerDownloadServiceHandlers(): void {
   // files; the batched variant chunks the work and yields between chunks so
   // the main thread stays responsive (see getFilesToSyncBatched).
   ipcMain.handle('download-service:get-files-to-sync', async (_, files: Array<{ filename: string; size: number; duration: number; dateCreated: Date }>) => {
-    const { getJensenDevice } = await import('./jensen')
     return service.getFilesToSyncBatched(files, 100, deviceListGuard(files.map((file) => file.filename), () => getJensenDevice().isConnected()))
   })
 

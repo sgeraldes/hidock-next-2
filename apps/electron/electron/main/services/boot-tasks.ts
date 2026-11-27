@@ -29,6 +29,7 @@ import { scheduleEvaluationCatchup } from './evaluation-catchup'
 import { runKindFallbackPass } from './kind-fallback'
 import { runSamplingPass } from './transcript-sampler'
 import { backfillMeetingWiki } from './meeting-wiki'
+import { backfillTranscriptValidity } from './transcript-validity-store'
 import { getVectorStore } from './vector-store'
 
 let summaryHealRunning = false
@@ -148,7 +149,6 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
       // Settle invite-count changes in the same boot, before downstream readers.
       // The Library has already painted; this pass yields between bounded slices.
       try {
-        const { backfillTranscriptValidity } = await import('./transcript-validity-store')
         await backfillTranscriptValidity()
       } catch (e) { console.warn('[TranscriptValidity] post-reconcile check failed:', e) }
       // Learn voices once the attendees are in place (spec 2026-10-03, Phase 2).
@@ -174,7 +174,6 @@ export const BOOT_TASK_DEFS: GatedBootTask[] = [
     feature: null,
     run: async () => {
       try {
-        const { backfillTranscriptValidity } = await import('./transcript-validity-store')
         await backfillTranscriptValidity()
       } catch (e) {
         console.warn('[TranscriptValidity] startup check failed:', e)

@@ -31,17 +31,7 @@ export class JensenDevice extends CoreJensenDevice {
   }
 }
 
-// Re-export the protocol surface so existing `from '../services/jensen'` imports keep working.
-export {
-  CMD,
-  USB_VENDOR_ID,
-  USB_ALTERNATE_VENDOR_ID,
-  USB_VENDOR_IDS,
-  USB_PRODUCT_IDS,
-  EP_OUT,
-  EP_IN,
-} from '@hidock/jensen-protocol'
-
+// Re-export the protocol types so existing `from '../services/jensen'` type imports keep working.
 export type {
   DeviceModel,
   DeviceInfo,

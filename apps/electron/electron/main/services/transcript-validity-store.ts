@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { queryAll, queryOne, runNoSave, runInTransaction, saveDatabase, acquireOrganizationCheckpointBudget } from './database'
 import { getCachePath } from './file-storage'
+import { reconcileWikiEligibility } from './meeting-wiki'
 import {
   assessTranscriptValidity,
   VALIDITY_VERSION,
@@ -397,7 +398,6 @@ async function runValidityBackfill(
   const changedIds: string[] = []
   const metadataChangedIds: string[] = []
   let afterId = ''
-  const { reconcileWikiEligibility } = await import('./meeting-wiki')
   sliceStart = performance.now()
   const releaseCheckpointBudget = acquireOrganizationCheckpointBudget()
   try {
