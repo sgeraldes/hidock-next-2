@@ -16,6 +16,7 @@ const seen: Array<[string, string]> = [
   ['The worker has not advertised the selected ASR engine', 'unavailable'],
   ['Local ASR runner not found: not configured', 'unavailable'],
   ['Remote worker awaiting-upload; automatic retry disabled', 'transient'],
+  ['Remote worker busy: the host is running another job and has not taken this audio', 'transient'],
   ['Remote worker failed; automatic retry disabled', 'transient'],
   ['Remote worker timeout; retained job identity for resume', 'transient'],
   ['[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent: fetch failed', 'transient'],

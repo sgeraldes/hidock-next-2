@@ -73,7 +73,7 @@ const RULES: Array<{ test: RegExp; class: TranscriptionErrorClass }> = [
   { test: /not advertised the selected ASR engine|Pair (a|with the) (remote worker|model host)|runner not found|failed to spawn|No module named|ECONNREFUSED|stepped aside|step-aside|host (is )?(paused|unavailable)|Remote transcription requires HTTPS/i, class: 'unavailable' },
   { test: /Provider response retained|covers \d+% of the|ends \d+s before the end|could not produce a complete, reliable transcript|interaction incomplete|output truncated|incomplete (interval|coverage)|unreliable (interval|timing)|text ends at .* voice continues/i, class: 'incomplete' },
   { test: /Audio too long|AudioLoadError|unsupported language|requires an explicit language|supports explicit English or Chinese|not splittable|could not be split|requires recordings over 30 minutes|empty transcript|Provider timestamps failed local audio grounding|memory limit|memory budget|insufficient memory|out of memory|MemoryError/i, class: 'input' },
-  { test: /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|timed? ?out|\b50[0234]\b|UNAVAILABLE|INTERNAL|Remote worker (failed|awaiting-upload|timeout)|retained job identity|Interrupted:/i, class: 'transient' },
+  { test: /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|timed? ?out|\b50[0234]\b|UNAVAILABLE|INTERNAL|Remote worker (failed|awaiting-upload|timeout|busy)|retained job identity|Interrupted:/i, class: 'transient' },
 ]
 
 const NEXT_ENGINE_MAY_HELP: Record<TranscriptionErrorClass, boolean> = {
