@@ -3,8 +3,8 @@ import importlib.util
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 SRC = Path(__file__).parents[1] / "src"
 sys.path.insert(0, str(SRC))
@@ -73,7 +73,7 @@ class StandaloneLaunchTests(unittest.TestCase):
         # 0.6.1 every align job failed with "No module named 'parakeet_worker'".
         with tempfile.TemporaryDirectory() as elsewhere:
             run = subprocess.run([sys.executable, "-P", str(SRC / "align_worker.py"), "--help"], cwd=elsewhere,
-                                 capture_output=True, text=True, timeout=60)
+                                 capture_output=True, text=True, timeout=60, check=False)
         self.assertNotIn("ModuleNotFoundError", run.stderr)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn("--worker-dir", run.stdout)

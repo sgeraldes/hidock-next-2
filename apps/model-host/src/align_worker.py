@@ -10,15 +10,22 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 # The host's embeddable Python does not put this folder on sys.path (asr_worker.py does the same).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from parakeet_worker import (ARTIFACT, MODEL, has_nonzero_samples, make_recognizer, model_files,
-                             normalized_audio, silence_aware_windows)
+from parakeet_worker import (
+    ARTIFACT,
+    MODEL,
+    has_nonzero_samples,
+    make_recognizer,
+    model_files,
+    normalized_audio,
+    silence_aware_windows,
+)
 
 BOUNDARY = "\u2581"
 # sherpa-onnx 1.13 (the version Prepare-ASR pins) turns BOUNDARY into a space in the tokens it returns.
