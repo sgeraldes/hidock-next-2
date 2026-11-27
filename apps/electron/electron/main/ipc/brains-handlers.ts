@@ -18,6 +18,8 @@ import { getBrainRegistry } from '../services/brains/brain-registry'
 import { getBrainCredentialStore } from '../services/brains/brain-credential-store'
 import { brainCooldown } from '../services/brains/brain-cooldown'
 import { DEFAULT_OPENAI_COMPATIBLE_SETTINGS } from '../services/brains/openai-compatible-brain'
+import { readRemoteGenerationCapability } from '../services/brains/model-host-generate-brain'
+import { readRemoteEmbeddingSpace } from '../services/brains/model-host-embed-brain'
 
 import type { AIBrain, BrainAuthStatus, BrainCapability, BrainId, BrainTask } from '../services/brains/types'
 
@@ -101,7 +103,6 @@ export function registerBrainsHandlers(): void {
   ipcMain.handle('brains:setEnabled', async (_e, args: { id: BrainId; enabled: boolean }) => {
     const { id, enabled } = args ?? ({} as { id: BrainId; enabled: boolean })
     if (id === 'model-host-generate' && enabled) {
-      const { readRemoteGenerationCapability } = await import('../services/brains/model-host-generate-brain')
       const { modelVersion } = await readRemoteGenerationCapability()
       const latest = getConfig().brains
       await replaceConfigSection('brains', { ...latest, enabled: { ...latest.enabled, [id]: true }, modelHostGeneration: { modelVersion } })
@@ -123,7 +124,6 @@ export function registerBrainsHandlers(): void {
     const { id } = args ?? ({} as { id: BrainId })
     if (id === 'model-host-embed') throw new Error('Select Model Host in the semantic search role, not as a text default')
     if (id === 'model-host-generate') {
-      const { readRemoteGenerationCapability } = await import('../services/brains/model-host-generate-brain')
       const { modelVersion } = await readRemoteGenerationCapability()
       const latest = getConfig().brains
       await replaceConfigSection('brains', { ...latest, defaultBrain: id,
@@ -147,13 +147,11 @@ export function registerBrainsHandlers(): void {
     let generationBinding: { modelVersion: string } | undefined
     if (id === 'model-host-generate') {
       if (!['chat', 'outputs', 'suggestions', 'summary'].includes(task)) throw new Error('Managed generation only supports text roles')
-      const { readRemoteGenerationCapability } = await import('../services/brains/model-host-generate-brain')
       generationBinding = { modelVersion: (await readRemoteGenerationCapability()).modelVersion }
     }
     let binding = current.modelHostEmbedding
     if (id === 'model-host-embed') {
       if (task !== 'embed') throw new Error('Model Host semantic role only supports embeddings')
-      const { readRemoteEmbeddingSpace } = await import('../services/brains/model-host-embed-brain')
       binding = { spaceId: (await readRemoteEmbeddingSpace()).spaceId }
     }
     const routing: Partial<Record<BrainTask, BrainId>> = { ...getConfig().brains.taskRouting }
