@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, openSync, fstatSync, readSync, closeSync } from 'fs'
-import { DeviceRecordingMarkerService, type MarkerContext, type MarkerSubject } from './device-recording-markers'
+import { DeviceRecordingMarkerService, addAnalysisRecordingMarkers, type MarkerContext, type MarkerSubject } from './device-recording-markers'
 import { getRecordingById } from './database'
 import { isRecordingEligible } from './recording-eligibility'
 import { inspectDeviceAudioWav } from './device-audio-track-export'
@@ -43,7 +43,6 @@ export function getDeviceRecordingMarkers(): DeviceRecordingMarkerService {
 export async function applyExistingDeviceMarkerAnalysis(recordingId: string): Promise<void> {
   if (!isRecordingEligible(recordingId)) return
   const { getTimelineAnalysis } = await import('./timeline-analysis')
-  const { addAnalysisRecordingMarkers } = await import('./device-recording-markers')
   const subject: MarkerSubject = { kind: 'recording', id: recordingId }
   const service = getDeviceRecordingMarkers()
   if (!(await service.getSettings(subject)).automationEnabled) return
