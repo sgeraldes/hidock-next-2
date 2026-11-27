@@ -143,8 +143,10 @@ describe('TranscriptTimingReview: Fix times on the model host', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' }))
     // A 1 s window goes out as 30 s since #202, so Parakeet can tell the language.
     expect(screen.getByText(/sends only about 30 s of audio around these lines to the model host/)).toBeInTheDocument()
-    expect(screen.getByText(/Shorter stretches go out as 30 s/)).toBeInTheDocument()
+    expect(screen.getByText(/Shorter stretches go out as 30 s, or the whole recording when it is shorter, so Parakeet/)).toBeInTheDocument()
     await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: hostRun.id, useHost: true }))
+    // The saved fix reloads the review; wait for it so no update lands after the test.
+    await waitFor(() => expect(getTiming).toHaveBeenCalledTimes(2))
   })
 
   it('counts a long window with its second on each side', async () => {
@@ -160,6 +162,8 @@ describe('TranscriptTimingReview: Fix times on the model host', () => {
     expect(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Fix times (from 0:04.9)' }))
     await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: odd.id }))
+    // The saved fix reloads the review; wait for it so no update lands after the test.
+    await waitFor(() => expect(getTiming).toHaveBeenCalledTimes(2))
   })
 
   it('keeps the untried host button after the computer-only fix refuses (CodeRabbit review of #198)', async () => {

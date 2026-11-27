@@ -189,7 +189,7 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
           {hostFix && hostRefused !== current.id && current.windowStart !== null && current.windowEnd !== null && (
             <p className="text-muted-foreground">
               Fix times with Parakeet sends only about {Math.round(hostAlignmentSeconds(current.windowStart, current.windowEnd))} s of audio around {current.lines.length === 1 ? 'this line' : 'these lines'} to the model host, where Parakeet hears the words; the transcript stays here.
-              Shorter stretches go out as {HOST_ALIGN_MIN_SECONDS} s, so Parakeet can tell the language.
+              Shorter stretches go out as {HOST_ALIGN_MIN_SECONDS} s, or the whole recording when it is shorter, so Parakeet can tell the language.
               If the host does not answer, the times come from the speech on this computer.
             </p>
           )}
