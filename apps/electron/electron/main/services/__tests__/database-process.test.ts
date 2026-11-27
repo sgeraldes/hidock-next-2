@@ -120,7 +120,13 @@ describe('database process', () => {
         }
       }
     })()
-    while (acknowledged.length < 40) await new Promise((r) => setTimeout(r, 5))
+    let writerDone = false
+    void writer.then(() => { writerDone = true })
+    const deadline = Date.now() + 20_000
+    while (acknowledged.length < 40 && !writerDone && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
+    // The writer must still be running when the process is killed, or the test proves nothing.
+    expect(failedInFlight, 'the writer failed before the kill').toBeNull()
+    expect(acknowledged.length).toBeGreaterThanOrEqual(40)
     const before = host.pid()
     children[children.length - 1].kill('SIGKILL')
     await writer

@@ -25,15 +25,19 @@ export const NOT_OPERATIONS = [
   'initializeDatabaseReadOnly',
   'closeDatabase',
   'closeDatabaseBackupWorker',
+  // Returns its release function, which cannot cross; the budget would stay acquired.
+  'acquireOrganizationCheckpointBudget',
 ] as const
 
 type NotOperation = (typeof NOT_OPERATIONS)[number]
 type AnyFunction = (...args: any[]) => any
 type DatabaseModule = typeof database
 
-/** A function none of whose parameters is itself a function. */
-type CallbackFree<F> = F extends (...args: infer A) => any
-  ? [Extract<A[number], AnyFunction>] extends [never] ? F : never
+/** A function that neither takes nor returns a function: both would have to cross the process boundary. */
+type CallbackFree<F> = F extends (...args: infer A) => infer R
+  ? [Extract<A[number], AnyFunction>] extends [never]
+    ? [Extract<Awaited<R>, AnyFunction>] extends [never] ? F : never
+    : never
   : never
 
 type DatabaseFunctionOperations = {

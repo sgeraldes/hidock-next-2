@@ -109,7 +109,7 @@ describe('2,150 transcript background passes', () => {
       run('PRAGMA synchronous = NORMAL')
       run("UPDATE transcripts SET validity_status='valid', integrity_status='ok'")
       queryOne('PRAGMA wal_checkpoint(TRUNCATE)')
-      run('PRAGMA synchronous = OFF')
+      if (!KEEP_SYNC) run('PRAGMA synchronous = OFF')
       holds.wiki = await hold('wiki backfill', () => backfillMeetingWiki({ budgetMs: 500, batchSize: 10 }))
       runInTransaction(() => {
         for (let i = 0; i < 2150; i++) run('INSERT INTO meetings (id, subject, start_time, end_time) VALUES (?, ?, ?, ?)', [`m-${i}`, `Project ${i}`, '2026-10-04T12:00:00Z', '2026-10-04T13:00:00Z'])

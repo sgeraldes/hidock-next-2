@@ -214,24 +214,98 @@ describe('database process host: close and restart races (review of #206)', () =
     const inits: unknown[] = []
     const configs: unknown[] = []
     const forks: FakeProcess[] = []
+    let releaseSecond!: () => void
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve })
     const host = createDatabaseProcessHost({
-      fork: () => { const p = fakeProcess({ ping: () => 1 }, { inits, configs }); forks.push(p); return p },
+      fork: () => {
+        const p = fakeProcess({ ping: () => configs[configs.length - 1] }, { inits, configs, openGate: forks.length === 0 ? undefined : secondGate })
+        forks.push(p)
+        return p
+      },
       backup: async () => undefined,
       restartDelaysMs: [1],
     })
     await host.start({ config: { v: 1 }, appVersion: 't', boot: 'full' })
     host.sendConfig({ v: 2 })
     forks[0].crash()
-    await new Promise((r) => setTimeout(r, 5))
+    // The replacement has its init and is still opening: this save must not be lost.
+    while (inits.length < 2) await new Promise((r) => setTimeout(r, 1))
     host.sendConfig({ v: 3 })
-    expect(await host.call('ping', [])).toBe(1)
-    // The restart's init carried the config saved before it; the one saved
-    // during its boot follows as soon as it is ready.
+    const answer = host.call('ping', [])
+    releaseSecond()
     expect(inits).toEqual([
       { config: { v: 1 }, appVersion: 't', boot: 'full' },
       { config: { v: 2 }, appVersion: 't', boot: 'existing-schema-only' },
     ])
-    expect(configs[configs.length - 1]).toEqual({ v: 3 })
+    // The config saved during the boot reaches the process before the queued call runs.
+    expect(await answer).toEqual({ v: 3 })
+    await host.close()
+  })
+
+  it('ends a process that could not get its init, and starts another', async () => {
+    let forks = 0
+    const host = createDatabaseProcessHost({
+      fork: () => {
+        forks++
+        const p = fakeProcess({ ping: () => forks })
+        if (forks === 1) {
+          const post = p.postMessage.bind(p)
+          p.postMessage = (message: unknown) => {
+            if ((message as MainToProcess).type === 'init') throw new Error('port closed')
+            post(message)
+          }
+        }
+        return p
+      },
+      backup: async () => undefined,
+      restartDelaysMs: [1],
+    })
+    expect(await host.start(init)).toBe(75)
+    expect(await host.call('ping', [])).toBe(2)
+    await host.close()
+  })
+
+  it('rejects start when the replacement process cannot be forked', async () => {
+    let forks = 0
+    const first = fakeProcess({}, { openGate: new Promise(() => undefined) })
+    const host = createDatabaseProcessHost({
+      fork: () => { if (forks++ === 0) return first; throw new Error('spawn EPERM') },
+      backup: async () => undefined,
+      restartDelaysMs: [1],
+    })
+    const started = host.start(init)
+    await new Promise((r) => setTimeout(r, 2))
+    first.crash()
+    await expect(started).rejects.toThrow('spawn EPERM')
+    expect(host.state()).toBe('failed')
+  })
+
+  it('drops a backup reply for a process that has exited instead of sending it to the next one', async () => {
+    const forks: FakeProcess[] = []
+    const sent: MainToProcess[][] = []
+    let finish!: () => void
+    const host = createDatabaseProcessHost({
+      fork: () => {
+        const p = fakeProcess({ ping: () => 1 })
+        const mine: MainToProcess[] = []
+        sent.push(mine)
+        const post = p.postMessage.bind(p)
+        p.postMessage = (message: unknown) => { mine.push(message as MainToProcess); post(message) }
+        forks.push(p)
+        return p
+      },
+      backup: () => new Promise<void>((resolve) => { finish = resolve }),
+      restartDelaysMs: [1],
+    })
+    await host.start(init)
+    forks[0].fromProcess({ type: 'backup-request', id: 1, request: { sourcePath: 'a', partialPath: 'b', targetPath: 'c', pagesPerStep: 1, checkFreeSpace: false } })
+    await new Promise((r) => setTimeout(r, 2))
+    forks[0].crash()
+    await new Promise((r) => setTimeout(r, 2))
+    expect(await host.call('ping', [])).toBe(1)
+    finish()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(sent[1].filter((m) => m.type === 'backup-result')).toEqual([])
     await host.close()
   })
 })
@@ -281,5 +355,23 @@ describe('database process server (review of #206)', () => {
     expect(error.name).toBe('BackupSpaceError')
     expect(error.message).toBe('disk full')
     expect(error.code).toBe('ENOSPC')
+  })
+})
+
+describe('database process server: a close that fails', () => {
+  it('exits nonzero without saying closed', () => {
+    const sent: ProcessToMain[] = []
+    const exits: number[] = []
+    const server = createDatabaseServer({
+      send: (m) => { sent.push(m) },
+      operations: () => ({}),
+      open: async () => 75,
+      applyConfig: () => undefined,
+      close: () => { throw new Error('disk I/O error') },
+      exit: (code) => { exits.push(code) },
+    })
+    server.handle({ type: 'close' })
+    expect(exits).toEqual([1])
+    expect(sent).toEqual([])
   })
 })

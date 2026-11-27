@@ -14632,49 +14632,53 @@ export function getRecordingsByStorageTier(tier: 'hot' | 'warm' | 'cold' | 'arch
  * Async wrapper for getRecordingById - yields to event loop using setImmediate
  * Use this in non-batch operations to prevent blocking the main thread
  */
-export async function getRecordingByIdAsync(id: string): Promise<Recording | undefined> {
-  return new Promise((resolve) => {
-    setImmediate(() => resolve(getRecordingById(id)))
+/**
+ * Run `work` on the next turn of the event loop and settle with its result. A
+ * throw rejects the promise; before, it escaped the setImmediate callback as an
+ * uncaught exception (review of #206).
+ */
+function onNextTurn<T>(work: () => T): Promise<T> {
+  return new Promise((resolve, reject) => {
+    setImmediate(() => {
+      try {
+        resolve(work())
+      } catch (error) {
+        reject(error)
+      }
+    })
   })
+}
+
+export async function getRecordingByIdAsync(id: string): Promise<Recording | undefined> {
+  return onNextTurn(() => getRecordingById(id))
 }
 
 /**
  * Async wrapper for getTranscriptByRecordingId - yields to event loop using setImmediate
  */
 export async function getTranscriptByRecordingIdAsync(recordingId: string): Promise<Transcript | undefined> {
-  return new Promise((resolve) => {
-    setImmediate(() => resolve(getTranscriptByRecordingId(recordingId)))
-  })
+  return onNextTurn(() => getTranscriptByRecordingId(recordingId))
 }
 
 /**
  * Async wrapper for queryAll - yields to event loop using setImmediate
  */
 export async function queryAllAsync<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-  return new Promise((resolve) => {
-    setImmediate(() => resolve(queryAll<T>(sql, params)))
-  })
+  return onNextTurn(() => queryAll<T>(sql, params))
 }
 
 /**
  * Async wrapper for upsertQualityAssessment - yields to event loop using setImmediate
  */
 export async function upsertQualityAssessmentAsync(assessment: Omit<QualityAssessment, 'assessed_at'>): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(() => {
-      upsertQualityAssessment(assessment)
-      resolve()
-    })
-  })
+  return onNextTurn(() => upsertQualityAssessment(assessment))
 }
 
 /**
  * Async wrapper for getQualityAssessment - yields to event loop using setImmediate
  */
 export async function getQualityAssessmentAsync(recordingId: string): Promise<QualityAssessment | undefined> {
-  return new Promise((resolve) => {
-    setImmediate(() => resolve(getQualityAssessment(recordingId)))
-  })
+  return onNextTurn(() => getQualityAssessment(recordingId))
 }
 
 /**
@@ -14684,12 +14688,7 @@ export async function updateRecordingStorageTierAsync(
   recordingId: string,
   tier: 'hot' | 'warm' | 'cold' | 'archive' | null
 ): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(() => {
-      updateRecordingStorageTier(recordingId, tier)
-      resolve()
-    })
-  })
+  return onNextTurn(() => updateRecordingStorageTier(recordingId, tier))
 }
 
 // =============================================================================

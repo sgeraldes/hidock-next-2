@@ -54,7 +54,11 @@ export function createDatabaseServer(deps: DatabaseServerDependencies): Database
     try {
       deps.close()
     } catch (error) {
+      // No 'closed' and a nonzero exit: main logs that the checkpoint did not
+      // finish. The WAL is recovered on the next open; nothing committed is lost.
       console.error('[DatabaseProcess] close failed:', error)
+      deps.exit(1)
+      return
     }
     deps.send({ type: 'closed' })
     deps.exit(0)

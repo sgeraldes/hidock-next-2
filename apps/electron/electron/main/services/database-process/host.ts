@@ -71,7 +71,8 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
   /** A config saved while the process was booting: sent once it is ready. */
   let configPending = false
   let closeWaiter: (() => void) | null = null
-  const backupControllers = new Map<number, AbortController>()
+  /** Backups each process asked for; ids restart at 1 in every process, so they are kept per process. */
+  const backupControllers = new Map<BackupWorkerProcess, Map<number, AbortController>>()
 
   const post = (message: MainToProcess) => {
     if (!child) throw new Error('The database process is not running')
@@ -103,7 +104,13 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
     if (includeQueued) queued.length = 0
   }
 
-  const onMessage = (value: unknown) => {
+  /** A reply about a backup goes to the process that asked, and only while it is still the current one. */
+  const postTo = (requester: BackupWorkerProcess, message: MainToProcess) => {
+    if (child !== requester) return
+    requester.postMessage(message)
+  }
+
+  const onMessage = (requester: BackupWorkerProcess, value: unknown) => {
     if (typeof value !== 'object' || value === null) return
     const message = value as ProcessToMain
     switch (message.type) {
@@ -162,20 +169,24 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
         return
       case 'backup-request': {
         const controller = new AbortController()
-        backupControllers.set(message.id, controller)
+        const own = backupControllers.get(requester) ?? new Map<number, AbortController>()
+        backupControllers.set(requester, own)
+        own.set(message.id, controller)
         deps.backup(message.request, {
           signal: controller.signal,
           onProgress: (progress) => {
-            try { post({ type: 'backup-progress', id: message.id, progress }) } catch { /* process gone */ }
+            try { postTo(requester, { type: 'backup-progress', id: message.id, progress }) } catch { /* process gone */ }
           },
         }).then(
-          () => { try { post({ type: 'backup-result', id: message.id, ok: true }) } catch { /* process gone */ } },
+          () => { try { postTo(requester, { type: 'backup-result', id: message.id, ok: true }) } catch { /* process gone */ } },
           (error: Error) => {
             try {
-              post({ type: 'backup-result', id: message.id, ok: false, error: serializeError(error) })
+              postTo(requester, { type: 'backup-result', id: message.id, ok: false, error: serializeError(error) })
             } catch { /* process gone */ }
           }
-        ).finally(() => backupControllers.delete(message.id))
+        ).finally(() => {
+          if (own.get(message.id) === controller) own.delete(message.id)
+        })
         return
       }
       case 'closed':
@@ -186,13 +197,16 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
   const spawn = () => {
     const current = deps.fork()
     child = current
-    current.on('message', onMessage)
+    current.on('message', (value: unknown) => onMessage(current, value))
     current.on('error', (error: Error) => console.error('[DatabaseProcess] process error:', error))
     current.once('exit', (code: number | null) => onExit(current, code))
     const sendInit = () => {
       const message: DatabaseProcessInit = booted ? { ...init!, boot: 'existing-schema-only' } : init!
       try { current.postMessage({ type: 'init', init: message }) } catch (error) {
-        console.error('[DatabaseProcess] could not send init:', error)
+        // A process that never got its init would never answer: end it, and the
+        // exit takes the bounded restart path.
+        console.error('[DatabaseProcess] could not send init; ending that process:', error)
+        try { current.kill() } catch { /* already gone */ }
       }
     }
     if (current.pid) sendInit()
@@ -202,9 +216,10 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
   const onExit = (exited: BackupWorkerProcess, code: number | null) => {
     if (child !== exited) return
     child = null
-    for (const controller of backupControllers.values()) controller.abort()
-    backupControllers.clear()
+    for (const controller of backupControllers.get(exited)?.values() ?? []) controller.abort()
+    backupControllers.delete(exited)
     if (state === 'closing' || state === 'closed') {
+      if (code !== 0 && state === 'closing') console.error(`[DatabaseProcess] exited with code ${code} while closing; its last checkpoint may not have finished (the WAL is recovered on the next open)`)
       state = 'closed'
       rejectAll(new DatabaseProcessExitedError('The database process closed'), true)
       closeWaiter?.()
@@ -236,6 +251,8 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
       } catch (spawnError) {
         failure = spawnError as Error
         state = 'failed'
+        readyWaiter?.reject(failure)
+        readyWaiter = null
         rejectAll(failure, true)
       }
     }, delay)
