@@ -858,18 +858,38 @@ class RAGService {
       // 'reindex-pending' — the ACTIVE provider's partition is empty while other
       //   partitions hold chunks (provider just switched, reindex not done).
       let retrievalIssue: 'provider-failure' | 'reindex-pending' | null = null
+      // The provider's own words when the query embedding threw, for the answer.
+      let retrievalFailureReason: string | null = null
+      // A query embedding that THROWS (27-nov-2026: "Remote semantic model is not
+      // ready" while the Model Host had not prepared its embedder) used to fail the
+      // whole chat with INTERNAL_ERROR. It is the same provider failure as an empty
+      // search over a populated partition, so the answer says retrieval failed.
+      const searchOrProviderFailure = async (run: () => Promise<SearchResult[]>): Promise<SearchResult[]> => {
+        try {
+          return await run()
+        } catch (error) {
+          // A cancel stays a cancel: nothing else is looked up or generated.
+          if (controller.signal.aborted) throw error
+          retrievalIssue = 'provider-failure'
+          const reason = error instanceof Error ? error.message : String(error)
+          retrievalFailureReason = reason.replace(/\s+/g, ' ').trim().slice(0, 160) || null
+          console.error('[RAG] Query embedding failed; answering without a library lookup:', error)
+          return []
+        }
+      }
       if (context.meetingId) {
         // Search within specific meeting. The re-rank used to be a cosine loop
         // written out here over doc.embedding — a second copy of the store's own
         // cosineSimilarity. Scoring now happens next to the vectors, which is
         // what lets them live outside this process.
-        searchResults = await vectorStore.searchWithinMeeting(context.meetingId, message, 5)
+        const meetingId = context.meetingId
+        searchResults = await searchOrProviderFailure(() => vectorStore.searchWithinMeeting(meetingId, message, 5))
       } else {
         // Global search — over-fetch 3x so the per-recording diversity cap can
         // drop near-duplicate chunks from one dominant meeting without starving
         // the excerpt budget.
-        searchResults = await vectorStore.search(message, topK * 3)
-        if (searchResults.length === 0) {
+        searchResults = await searchOrProviderFailure(() => vectorStore.search(message, topK * 3))
+        if (searchResults.length === 0 && retrievalIssue === null) {
           const activeProvider = await getEmbeddingsService().activeProviderId()
           trace.embedding_provider = activeProvider
         const partitionCount = activeProvider ? vectorStore.getEligibleDocumentCount(activeProvider) : 0
@@ -1292,10 +1312,15 @@ class RAGService {
         structuredRowCount + pinnedContextParts.length + graphParts.length + contextParts.length > 0
 
       // Prepare messages
+      const failureCause = retrievalFailureReason ? ` The provider said: "${retrievalFailureReason}".` : ''
+      // With other context present the answer must still say the transcript search did not run.
+      const partialNote = retrievalIssue === 'provider-failure'
+        ? `[System note: semantic search over transcripts failed for this question, so NO transcript excerpts were looked up.${failureCause} Answer from the items below and tell the user the transcript search did not run.]\n\n`
+        : ''
       const contextText = hasContent
-        ? `Grounded context follows — date grounding, structured meeting intelligence (action items / digests), pinned knowledge base items, graph facts, and relevant transcript excerpts:\n\n${allContextParts.join('\n\n---\n\n')}`
+        ? `${partialNote}Grounded context follows — date grounding, structured meeting intelligence (action items / digests), pinned knowledge base items, graph facts, and relevant transcript excerpts:\n\n${allContextParts.join('\n\n---\n\n')}`
         : retrievalIssue === 'provider-failure'
-          ? '[System note: semantic search is temporarily unavailable — the embedding provider could not be reached, so NO library lookup was performed for this question. Tell the user retrieval failed (suggest checking the embedding provider / API key in Settings) instead of saying no transcripts exist. Do NOT claim the knowledge base is empty.]'
+          ? `[System note: semantic search is temporarily unavailable — the embedding provider could not be reached, so NO library lookup was performed for this question.${failureCause} Tell the user retrieval failed and why (suggest checking the embedding provider in Settings, or that the Model Host may still be preparing its model) instead of saying no transcripts exist. Do NOT claim the knowledge base is empty.]`
           : retrievalIssue === 'reindex-pending'
             ? '[System note: the library was embedded with a DIFFERENT embedding provider than the currently active one, and re-indexing for the active provider has not completed. Tell the user answers are temporarily limited while the library re-indexes (progress in Settings → Embeddings) instead of saying no transcripts exist. Do NOT claim the knowledge base is empty.]'
             : `No relevant meeting transcripts found for this query.\n\n${orchestratedParts.join('\n\n')}`

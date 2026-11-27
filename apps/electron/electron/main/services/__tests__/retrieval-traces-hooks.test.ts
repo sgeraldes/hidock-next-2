@@ -75,24 +75,27 @@ afterEach(async () => {
 })
 describe('request hooks to real temporary trace SQLite', () => {
   it('keeps generation B cancellable when generation A throws for the same session', async () => {
-    let rejectA!: (error: Error) => void
+    // A search failure no longer throws (it answers as a provider failure), so A
+    // throws from generation, after its search is released.
+    let releaseA!: () => void
     let releaseB!: () => void
     const service = getRAGService()
     const internals = service as unknown as {
       generateAnswer(session: string, query: string): Promise<unknown>
       activeControllers: Map<string, AbortController>
     }
-    state.search.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectA = reject }))
+    state.search.mockImplementationOnce(() => new Promise(resolve => { releaseA = () => resolve([]) }))
     state.search.mockImplementationOnce(() => new Promise(resolve => { releaseB = () => resolve([]) }))
+    state.generate.mockRejectedValueOnce(new Error('A failed'))
     const a = internals.generateAnswer('shared', 'question A')
     const aFailure = expect(a).rejects.toThrow('A failed')
-    await vi.waitFor(() => expect(rejectA).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(releaseA).toBeTypeOf('function'))
     const controllerA = internals.activeControllers.get('shared')!
     const b = internals.generateAnswer('shared', 'question B')
     await vi.waitFor(() => expect(releaseB).toBeTypeOf('function'))
     const controllerB = internals.activeControllers.get('shared')!
     expect(controllerB).not.toBe(controllerA)
-    rejectA(new Error('A failed'))
+    releaseA()
     await aFailure
     expect(internals.activeControllers.get('shared')).toBe(controllerB)
     expect(service.cancelRequest('shared')).toBe(true)
@@ -221,6 +224,40 @@ describe('request hooks to real temporary trace SQLite', () => {
     expect(row.status).toBe(outcome === 'provider-failure' ? 'error' : outcome)
     expect(JSON.stringify(row)).not.toContain('secret payload')
     if (outcome === 'provider-failure') expect(row.retrieval_issue).toBe(outcome)
+  })
+  it('answers in words when the query embedding throws, instead of failing the whole chat (27-nov-2026)', async () => {
+    state.pinned = state.graph = false
+    state.search.mockRejectedValue(new Error('Remote semantic model is not ready'))
+    const response = await getRAGService().chat('session', 'question')
+    expect(response.error).toBeUndefined()
+    expect(response.answer).toBe('answer')
+    const sent = JSON.stringify(state.generate.mock.calls[0][0])
+    expect(sent).toContain('semantic search is temporarily unavailable')
+    expect(sent).toContain('Remote semantic model is not ready')
+    await store.flush()
+    const row = (await store.read())[0]
+    expect(row.status).toBe('error')
+    expect(row.retrieval_issue).toBe('provider-failure')
+  })
+  it('says the transcript search did not run when other context still answers', async () => {
+    state.graph = false
+    state.search.mockRejectedValue(new Error('Remote semantic model is not ready'))
+    const response = await getRAGService().chat('session', 'question')
+    expect(response.answer).toBe('answer')
+    const sent = JSON.stringify(state.generate.mock.calls[0][0])
+    expect(sent).toContain('pinned text')
+    expect(sent).toContain('the transcript search did not run')
+  })
+  it('keeps a cancel during a failing search a cancel, with no generation', async () => {
+    let failSearch!: () => void
+    state.search.mockImplementationOnce(() => new Promise((_resolve, reject) => { failSearch = () => reject(new Error('aborted embed')) }))
+    const service = getRAGService()
+    const pendingChat = service.chat('session', 'question')
+    await vi.waitFor(() => expect(failSearch).toBeTypeOf('function'))
+    expect(service.cancelRequest('session')).toBe(true)
+    failSearch()
+    await expect(pendingChat).rejects.toThrow('aborted embed')
+    expect(state.generate).not.toHaveBeenCalled()
   })
   it('records Explore results with order and scores', async () => {
     await getRAGService().globalSearch('Title Summary')
