@@ -284,8 +284,9 @@ and a memory limit. Failed preparation does not advertise the engine. A runtime/
 invalidates the successful-test fingerprint and requires preparing again. Then start the host tray.
 The host's own scripts enter every fingerprint with LF line endings (`src/source-fingerprint.mjs`),
 so an installer built from a checkout with `core.autocrlf=true` keeps the models already prepared.
-Proofs written before this, with the raw bytes of an LF or a CRLF install, are still accepted.
-The text-generation proof hashes those scripts by content, not by file time.
+ASR, semantic, native-diarization and realtime proofs written before this, with the raw bytes of
+an LF or a CRLF install, are still accepted. The text-generation proof now hashes those scripts by
+content, not by file time; one made before this change does not match and is prepared once more.
 Cohere requires an explicit language (for example `es`); VibeVoice permits automatic language.
 These steps have not yet been exercised on GAMESTATION with this release.
 

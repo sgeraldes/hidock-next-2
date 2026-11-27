@@ -21,7 +21,7 @@ import { runVad } from './vad.mjs'
 import { runAsr } from './asr.mjs'
 import { runAlignment, alignmentModels } from './align.mjs'
 import { NATIVE_DIARIZATION_MODEL, readyNativeDiarization, runNativeDiarization } from './native-diarization.mjs'
-import { readyAsrModels, asrRuntimeFingerprint } from './asr-readiness.mjs'
+import { readyAsrModels, hostAsrFingerprint } from './asr-readiness.mjs'
 import { DecideModels } from './decide.mjs'
 import { nativeRealtimeRuntime } from './realtime-native-runtime.mjs'
 import { readyRealtime } from './realtime-readiness.mjs'
@@ -95,7 +95,7 @@ export async function start(options = {}) {
   const workerPath = resolveWorker(config.workerPath)
   const ffmpegPath = resolveFfmpeg(config.ffmpegPath)
   const gpu = await detectGpu()
-  const asrModels = readyAsrModels(config, pythonPath, (python, model) => asrRuntimeFingerprint(python, model, dirs.root))
+  const asrModels = readyAsrModels(config, pythonPath, hostAsrFingerprint(dirs.root))
   const nativeDiarizationModels = readyNativeDiarization(config, pythonPath, dirs.root) ? [NATIVE_DIARIZATION_MODEL] : []
   const semanticOptions = { pythonPath, workerPath,
     modelDir: join(dirs.models, 'nemotron-3-embed-1b'),

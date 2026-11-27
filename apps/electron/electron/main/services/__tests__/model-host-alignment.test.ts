@@ -56,7 +56,7 @@ describe('alignWordsOnModelHost', () => {
   afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
 
   /** A mocked host: no network, no model. */
-  function host(options: { health?: unknown; status?: string; running?: boolean; busyUploads?: number } = {}) {
+  function host(options: { health?: unknown; status?: string; running?: boolean; busyUploads?: number; refuseUploadWith?: number } = {}) {
     const seen: string[] = []
     // The host refuses this many uploads with 429 while its single slot runs another job.
     let busyLeft = options.busyUploads ?? 0
@@ -75,8 +75,9 @@ describe('alignWordsOnModelHost', () => {
         return json({ id, status: 'awaiting-upload', audioHash })
       }
       if (path === `/v1/jobs/${id}/cancel`) return json({ id, status: 'cancelled', audioHash })
-      if (path === `/v1/jobs/${id}`) return json({ id, status: accepted || !options.busyUploads ? 'running' : 'awaiting-upload', audioHash })
+      if (path === `/v1/jobs/${id}`) return json({ id, status: accepted || (!options.busyUploads && !options.refuseUploadWith) ? 'running' : 'awaiting-upload', audioHash })
       if (path === `/v1/jobs/${id}/audio`) {
+        if (options.refuseUploadWith) return json({ error: 'refused' }, options.refuseUploadWith)
         if (busyLeft > 0) { busyLeft--; return json({ error: 'Worker is busy or paused' }, 429) }
         accepted = true
         if (options.running) return json({ id, status: 'running', audioHash }, 202)
@@ -142,6 +143,15 @@ describe('alignWordsOnModelHost', () => {
     await expect(failure).rejects.toThrow(/busy with another job/)
     expect(seen).toContain('POST /v1/jobs/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb/cancel')
   }, 10_000)
+
+  it.each([401, 413, 500])('does not wait when the host refuses the upload with %i, which is not busy', async (code) => {
+    const { fetchFn, seen } = host({ refuseUploadWith: code })
+    const started = Date.now()
+    await expect(alignWordsOnModelHost(clip, settings, { timeoutMs: 10_000, recordingId: 'rec-1', store: memory() }, fetchFn))
+      .rejects.toThrow(/awaiting-upload/)
+    expect(seen.filter((s) => s.startsWith('PUT')).length).toBe(1)
+    expect(Date.now() - started).toBeLessThan(2000)
+  })
 
   it('does not cancel a job the host already ended', async () => {
     const { fetchFn, seen } = host({ status: 'failed' })

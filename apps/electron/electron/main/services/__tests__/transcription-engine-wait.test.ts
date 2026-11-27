@@ -142,6 +142,15 @@ describe('CredentialRefusals kept across a restart', () => {
     expect(stored).not.toContain('not-a-real-key')
   })
 
+  it('does not store a bearer token or an x-goog-api-key a provider message quotes', () => {
+    const token = 'ya29.not-a-real-token_0123456789' // pragma: allowlist secret (test fixture)
+    new CredentialRefusals(1000, fileRefusalStore(() => path))
+      .record('configured:gemini', key, `402 Authorization: Bearer ${token}; x-goog-api-key: plain-not-a-real-key-42`, 0)
+    const stored = readFileSync(path, 'utf8')
+    expect(stored).not.toContain(token)
+    expect(stored).not.toContain('plain-not-a-real-key-42')
+  })
+
   it('starts empty from a corrupt, unreadable or missing file, without throwing', () => {
     writeFileSync(path, '{not json')
     expect(new CredentialRefusals(1000, fileRefusalStore(() => path)).reason('configured:gemini', key, 10)).toBeNull()

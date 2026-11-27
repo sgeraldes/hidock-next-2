@@ -117,6 +117,8 @@ function withoutKeys(message: string): string {
   return message
     .replace(/([?&](?:key|api_key|apikey)=)[^&\s"')]+/gi, '$1[redacted]')
     .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[redacted]')
+    .replace(/(Bearer\s+)[^\s"',;)]+/gi, '$1[redacted]')
+    .replace(/((?:x-goog-api-key|api[-_]?key|authorization)\s*[:=]\s*)[^\s"',;)]+/gi, '$1[redacted]')
     .replace(/\s+/g, ' ').trim().slice(0, 300)
 }
 

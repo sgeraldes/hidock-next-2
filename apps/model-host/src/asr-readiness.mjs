@@ -84,6 +84,10 @@ export function asrRuntimeFingerprint(pythonPath, model, root = hostRoot(), form
   }
   return hash.digest('hex')
 }
+/** The fingerprint the service checks proofs with: this host's root, every line-ending form. */
+export function hostAsrFingerprint(root) {
+  return (pythonPath, model, form) => asrRuntimeFingerprint(pythonPath, model, root, form)
+}
 export function readyAsrModels(config, pythonPath, fingerprint = asrRuntimeFingerprint) {
   return (config.asrModels || []).filter(model => {
     if (!ASR_MODELS.has(model)) return false

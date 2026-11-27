@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { fingerprintBytes, fingerprintMatches, fingerprintMatchesAsync, isHostSource } from '../src/source-fingerprint.mjs'
 import { readySemanticEmbeddings, semanticFingerprint } from '../src/semantic-embeddings.mjs'
-import { readyAsrModels } from '../src/asr-readiness.mjs'
+import { readyAsrModels, hostAsrFingerprint, asrRuntimeFingerprint } from '../src/asr-readiness.mjs'
 import { generationFingerprint, generationPaths, generationReadiness, GENERATION_VERSION } from '../src/generation.mjs'
 
 // 0.5.x installers shipped the host scripts with LF; 0.6.0 and 0.6.1 were built from a
@@ -75,6 +75,24 @@ describe('host script fingerprints ignore line endings', () => {
     const forms = []
     expect(readyAsrModels(config, 'python', (_python, _model, form) => { forms.push(form); return `${form}-print` })).toEqual([model])
     expect(forms).toEqual(['lf', 'crlf'])
+  })
+
+  it('keeps a CRLF-form ASR proof through the wrapper the service uses', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'asr-fingerprint-'))
+    try {
+      const python = join(root, 'python.exe'), site = join(root, 'Lib', 'site-packages')
+      await mkdir(join(site, 'transformers'), { recursive: true }); await mkdir(join(site, 'vibevoice'), { recursive: true })
+      await writeFile(python, 'python'); await writeFile(join(site, 'transformers', '__init__.py'), 'transformers')
+      await writeFile(join(site, 'vibevoice', '__init__.py'), 'vibevoice')
+      const model = 'microsoft/VibeVoice-ASR'
+      const proof = form => ({ asrModels: [model], asrValidation: { [model]: { testedAt: 't', modelVersion: 'v', device: 'cuda',
+        fingerprint: asrRuntimeFingerprint(python, model, root, form) } } })
+      expect(readyAsrModels(proof('crlf'), python, hostAsrFingerprint(root))).toEqual([model])
+      expect(readyAsrModels(proof('lf'), python, hostAsrFingerprint(root))).toEqual([model])
+      // The wrapper main.mjs had before: it dropped the form, so a 0.6.x proof never matched.
+      const lfOnly = (p, m) => asrRuntimeFingerprint(p, m, root)
+      expect(readyAsrModels(proof('crlf'), python, lfOnly)).toEqual([])
+    } finally { await rm(root, { recursive: true, force: true }) }
   })
 
   it('keeps a generation proof across an update that rewrites the host scripts', async () => {

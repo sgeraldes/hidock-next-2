@@ -175,6 +175,7 @@ export async function runRemoteWorkerJob(input: {
     const controller = new AbortController()
     const watch = setInterval(() => { if (cancelled() || Date.now() >= deadline) controller.abort() }, 250)
     const body = createReadStream(input.path)
+    let hostBusy = false
     try {
       // Node streams the file; no full recording Buffer is retained in Electron.
       job = await request(`/v1/jobs/${identity.id}/audio`, { method: 'PUT',
@@ -182,11 +183,13 @@ export async function runRemoteWorkerJob(input: {
         headers: { 'content-type': 'application/octet-stream' } } as RequestInit)
     } catch (error) {
       if (cancelled()) return cancel()
+      // Only the host's busy refusal is worth waiting for; any other refusal ends here as before.
+      hostBusy = /Remote worker HTTP 429[^0-9]/.test(error instanceof Error ? error.message : String(error))
       // The PUT may have committed even if its response was lost. Observe, never re-upload blindly.
       if (Date.now() >= deadline) throw new Error('Remote worker timeout; retained job identity for resume', { cause: error })
       job = await request(`/v1/jobs/${identity.id}`)
     } finally { clearInterval(watch); body.destroy() }
-    if (!input.waitWhileHostBusy) break
+    if (!input.waitWhileHostBusy || !hostBusy) break
   }
   for (;;) {
     if (cancelled()) return cancel()
