@@ -1,10 +1,12 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, openSync, fstatSync, readSync, closeSync } from 'fs'
-import { DeviceRecordingMarkerService, type MarkerContext, type MarkerSubject } from './device-recording-markers'
+import { DeviceRecordingMarkerService, addAnalysisRecordingMarkers, type MarkerContext, type MarkerSubject } from './device-recording-markers'
 import { getRecordingById } from './database'
 import { isRecordingEligible } from './recording-eligibility'
 import { inspectDeviceAudioWav } from './device-audio-track-export'
+// timeline-analysis imports this module too; both sides use the other only inside functions.
+import { getTimelineAnalysis } from './timeline-analysis'
 
 let activeCapture: () => { sessionId: string | null; elapsedMs: number; filePath?: string } = () => ({ sessionId: null, elapsedMs: 0 })
 export function bindDeviceMarkerCapture(provider: typeof activeCapture): void { activeCapture = provider }
@@ -42,8 +44,6 @@ export function getDeviceRecordingMarkers(): DeviceRecordingMarkerService {
 /** Reuse existing local analysis only; opt-in never starts a provider request. */
 export async function applyExistingDeviceMarkerAnalysis(recordingId: string): Promise<void> {
   if (!isRecordingEligible(recordingId)) return
-  const { getTimelineAnalysis } = await import('./timeline-analysis')
-  const { addAnalysisRecordingMarkers } = await import('./device-recording-markers')
   const subject: MarkerSubject = { kind: 'recording', id: recordingId }
   const service = getDeviceRecordingMarkers()
   if (!(await service.getSettings(subject)).automationEnabled) return
