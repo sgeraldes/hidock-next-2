@@ -60,7 +60,7 @@ describe('database process host', () => {
     await expect(host.call('add', [1, 2])).rejects.toThrow(/not started/)
     expect(await host.start(init)).toBe(75)
     expect(await host.call('add', [2, 3])).toBe(5)
-    const error = await host.call('boom', []).catch((e) => e)
+    const error = (await host.call('boom', []).catch((e: unknown) => e)) as Error & { code?: string }
     expect(error).toBeInstanceOf(RangeError)
     expect(error.message).toBe('too far')
     expect(error.code).toBe('E_FAR')
