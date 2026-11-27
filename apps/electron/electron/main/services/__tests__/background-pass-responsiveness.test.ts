@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi } from 'vitest'
+import { afterAll, describe, it, expect, vi } from 'vitest'
 import { rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -46,6 +46,9 @@ let attempt = 0
 function removeFixtureDatabase(path: string): void {
   for (const file of [path, `${path}-wal`, `${path}-shm`]) rmSync(file, { force: true })
 }
+
+// The passes write the wiki and their cursors under the data folder (paths.root).
+afterAll(() => { rmSync(paths.root, { recursive: true, force: true }) })
 
 describe('2,150 transcript background passes', () => {
   it('keeps each main-thread hold below 100 ms', { retry: 1, timeout: 300_000 }, async () => {
