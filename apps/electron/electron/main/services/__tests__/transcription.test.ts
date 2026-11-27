@@ -19,6 +19,7 @@ import { join as joinPath } from 'path'
 // Track calls to updateRecordingStatus
 const mockUpdateRecordingStatus = vi.fn()
 const mockUpdateQueueItem = vi.fn()
+const mockHoldQueueItemForEngine = vi.fn()
 const mockGetQueueItems = vi.fn()
 const mockGetRecordingById = vi.fn()
 const mockInsertTranscript = vi.fn()
@@ -150,6 +151,7 @@ vi.mock('../database', () => ({
   insertTranscript: (...args: any[]) => mockInsertTranscript(...args),
   getQueueItems: (...args: any[]) => mockGetQueueItems(...args),
   updateQueueItem: (...args: any[]) => mockUpdateQueueItem(...args),
+  holdQueueItemForEngine: (...args: any[]) => mockHoldQueueItemForEngine(...args),
   updateQueueProgress: (...args: any[]) => mockUpdateQueueProgress(...args),
   getMeetingById: vi.fn(),
   findCandidateMeetingsForRecording: vi.fn(() => []),
@@ -579,6 +581,81 @@ describe('Transcription Service', () => {
         expect(mockRecordTranscriptionAttempt.mock.calls[1][2].message).toBe('No Model Host is paired')
       } finally {
         stopTranscriptionProcessor()
+      }
+    })
+
+    it('waits instead of failing when no engine can take the recording, and does not call Gemini again with a refused key', { timeout: 20000 }, async () => {
+      // 27-nov-2026: Gemini answered 402 (prepaid credits depleted) and no Model Host was usable.
+      // Five recordings failed with automatic retry disabled; they should have waited.
+      Object.assign(mockConfig.transcription, { engineFallbackEnabled: true, engineRetries: { transient: 0, quota: 0, unknown: 0 }, modelHostUrl: '' })
+      mockGeminiResult.mockReturnValue(new Error('{"error":{"code":402,"message":"Your prepayment credits are depleted.","status":"RESOURCE_EXHAUSTED"}}'))
+      const rows = [
+        { id: 'queue-w1', recording_id: 'rec-123', filename: 'test.wav', status: 'pending', attempts: 0, retry_count: 0 },
+        { id: 'queue-w2', recording_id: 'rec-456', filename: 'other.wav', status: 'pending', attempts: 0, retry_count: 0 },
+      ]
+      mockGetQueueItems.mockImplementation((status?: string) => (status === 'pending' ? rows.filter((r) => r.status === 'pending') : []))
+      mockUpdateQueueItem.mockImplementation((id: string, status: string) => { const row = rows.find((r) => r.id === id); if (row) row.status = status })
+      mockHoldQueueItemForEngine.mockImplementation((id: string) => { const row = rows.find((r) => r.id === id); if (row) row.status = 'pending' })
+      mockGetRecordingById.mockImplementation((id: string) => ({ id, filename: `${id}.wav`, file_path: `/recordings/${id}.wav`, status: 'complete' }))
+      const { processQueueManually, getQueueState, resetEngineWait } = await import('../transcription')
+      try {
+        await processQueueManually()
+        expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[1] === 'failed')).toBe(false)
+        expect(mockHoldQueueItemForEngine).toHaveBeenCalledWith('queue-w1', expect.stringContaining('Waiting for a transcription engine'))
+        expect(mockHoldQueueItemForEngine.mock.calls[0][1]).toContain('prepayment credits are depleted')
+        // The second recording is not started: it would find the same engines missing.
+        expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-w2' && call[1] === 'processing')).toBe(false)
+        expect(getQueueState()).toMatchObject({ pauseReason: 'no_engine_available' })
+        expect(getQueueState().pauseDetail).toContain('configured:gemini')
+        const geminiCalls = mockGeminiTranscribeCall.mock.calls.length
+        // An explicit run looks at the engines again, but the refused key is skipped: no second Gemini call.
+        await processQueueManually()
+        expect(mockGeminiTranscribeCall.mock.calls.length).toBe(geminiCalls)
+        expect(mockRecordTranscriptionAttempt.mock.calls.at(-3)?.[2]).toMatchObject({ engine: 'configured:gemini', outcome: 'skipped-unavailable' })
+        expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[1] === 'failed')).toBe(false)
+      } finally {
+        mockGetQueueItems.mockReset()
+        mockUpdateQueueItem.mockReset()
+        mockGetRecordingById.mockReset()
+        mockGetQueueItems.mockReturnValue([])
+        // Leave no wait and no refused key behind for the next test.
+        resetEngineWait()
+      }
+    })
+
+    it('lets a row that named its engine fail as before, so it does not hold the queue (Kiro review)', { timeout: 20000 }, async () => {
+      Object.assign(mockConfig.transcription, { engineFallbackEnabled: true, engineRetries: { transient: 0, quota: 0, unknown: 0 }, modelHostUrl: '' })
+      const rows = [{ id: 'queue-r1', recording_id: 'rec-123', filename: 'test.wav', status: 'pending', attempts: 0, retry_count: 0, provider: 'remote-worker' }]
+      mockGetQueueItems.mockImplementation((status?: string) => (status === 'pending' ? rows.filter((r) => r.status === 'pending') : []))
+      mockUpdateQueueItem.mockImplementation((id: string, status: string) => { const row = rows.find((r) => r.id === id); if (row) row.status = status })
+      mockGetRecordingById.mockImplementation((id: string) => ({ id, filename: `${id}.wav`, file_path: `/recordings/${id}.wav`, status: 'complete' }))
+      const { processQueueManually, getQueueState, resetEngineWait } = await import('../transcription')
+      try {
+        await processQueueManually()
+        expect(mockHoldQueueItemForEngine).not.toHaveBeenCalled()
+        expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-r1' && call[1] === 'failed')).toBe(true)
+        expect(getQueueState().pauseReason).not.toBe('no_engine_available')
+      } finally {
+        mockGetQueueItems.mockReset().mockReturnValue([])
+        mockUpdateQueueItem.mockReset()
+        mockGetRecordingById.mockReset()
+        resetEngineWait()
+      }
+    })
+
+    it('puts a row that failed only for lack of an engine back to waiting, retries untouched', { timeout: 20000 }, async () => {
+      const failed = { id: 'queue-old', recording_id: 'rec-123', filename: 'test.wav', status: 'failed', attempts: 1, retry_count: 0,
+        completed_at: new Date(Date.now() - 3600_000).toISOString().replace('T', ' ').slice(0, 19), error_message: 'No transcription engine succeeded: configured:gemini #1 failed (credentials); ' +
+          'remote:moondream/parakeet-ultra #1 failed (unavailable); remote:Qwen/Qwen3-ASR-1.7B #1 failed (unavailable). ' +
+          'Last error: The worker has not advertised the selected ASR engine; automatic retry disabled' }
+      mockGetQueueItems.mockImplementation((status?: string) => (status === 'failed' ? [failed] : []))
+      const { processQueueManually } = await import('../transcription')
+      try {
+        await processQueueManually()
+        expect(mockHoldQueueItemForEngine).toHaveBeenCalledWith('queue-old', 'Waiting for a transcription engine')
+        expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-old' && call[1] === 'pending')).toBe(false)
+      } finally {
+        mockGetQueueItems.mockReset().mockReturnValue([])
       }
     })
 

@@ -2,7 +2,15 @@ import { getEventBus } from './event-bus'
 import { recoverRemoteJobs, cancelRecoveredRemote, stopRemoteRecovery } from './remote-job-recovery'
 import { createRemoteRecoverySupervisor } from './remote-recovery-supervisor'
 import { resolveAudioRoute } from './audio-execution-route'
-import { chainForRequest, chainSettingsFromConfig, formatEngineStep, runEngineChain, type EngineAttempt, type EngineStep } from './transcription-engine-chain'
+import { chainForRequest, chainSettingsFromConfig, EngineChainExhaustedError, engineLabel, formatEngineStep, runEngineChain, type EngineAttempt, type EngineStep } from './transcription-engine-chain'
+import {
+  CredentialRefusals,
+  credentialFingerprint,
+  ENGINE_WAIT_RECHECK_MS,
+  engineWaitReason,
+  failedOnlyForLackOfEngine,
+  noEngineCouldTakeJob,
+} from './transcription-engine-wait'
 import { engineRouteInput, engineUnavailableReason } from './transcription-engine-routing'
 import { classifyTranscriptionError } from './transcription-errors'
 import { brainCooldown, noteBrainFailure } from './brains/brain-cooldown'
@@ -202,6 +210,7 @@ import {
   getOwnedProcessingRuns,
   completeProcessingRun,
   failProcessingRun,
+  holdQueueItemForEngine,
   type Transcript
 } from './database'
 import { addActiveTranscription, getActiveTranscriptions, removeActiveTranscription } from './transcription-activity'
@@ -446,9 +455,53 @@ export function isQueuePaused(): boolean {
 
 let missingGeminiKeyWarned = false
 
+/**
+ * Gemini keys the provider refused (402, no credit): the chain skips Gemini
+ * with the same key instead of calling it for every recording (27-nov-2026).
+ */
+const credentialRefusals = new CredentialRefusals()
+
+/** Chain steps that run on the Gemini key. An owner's explicit engine pick (`requested`) is never skipped. */
+function runsOnGeminiKey(label: string): boolean {
+  return label === 'gemini' || label === 'configured:gemini'
+}
+
+function geminiKeyFingerprint(): string | null {
+  return credentialFingerprint(resolveGeminiApiKey())
+}
+
+/**
+ * Set when the last recording found no engine able to take it. The queue
+ * waits until this passes or an engine setting changes (key, host, chain).
+ */
+let engineWait: { until: number; reason: string; settings: string } | null = null
+
+/** The settings whose change can make an engine usable again. Secrets enter only as fingerprints. */
+function engineWaitSettings(): string {
+  const t = getConfig().transcription
+  return JSON.stringify([t.provider, t.remoteAsrModel, t.engineChain, t.engineFallbackEnabled, t.modelHostUrl,
+    credentialFingerprint(t.modelHostToken), geminiKeyFingerprint()])
+}
+
+/** Forget the wait and every refused key, as a restart does. */
+export function resetEngineWait(): void {
+  engineWait = null
+  credentialRefusals.clear()
+}
+
+/** The queue may run: the wait expired or the settings it was waiting on changed. */
+function engineWaitOver(now: number = Date.now()): boolean {
+  if (!engineWait) return true
+  if (now < engineWait.until && engineWait.settings === engineWaitSettings()) return false
+  engineWait = null
+  return true
+}
+
 export interface TranscriptionQueueState {
   /** Why the queue is waiting without being paused by the owner. */
-  pauseReason?: 'no_gemini_key' | null
+  pauseReason?: 'no_gemini_key' | 'no_engine_available' | null
+  /** For no_engine_available: each engine and why it cannot run. */
+  pauseDetail?: string | null
   paused: boolean
   isProcessing: boolean
   processingId: string | null
@@ -462,7 +515,9 @@ export interface TranscriptionQueueState {
 export function getQueueState(): TranscriptionQueueState {
   const owned = getOwnedPipelineRecordings()
   return {
-    pauseReason: (getConfig().transcription.provider || 'gemini') === 'gemini' && !resolveGeminiApiKey() ? 'no_gemini_key' : null,
+    pauseReason: (getConfig().transcription.provider || 'gemini') === 'gemini' && !resolveGeminiApiKey() ? 'no_gemini_key'
+      : engineWait && getQueueItems('pending').length > 0 ? 'no_engine_available' : null,
+    pauseDetail: engineWait && getQueueItems('pending').length > 0 ? engineWait.reason : null,
     paused: queuePaused,
     isProcessing: owned.length > 0,
     processingId: owned.includes(currentProcessingId || '') ? currentProcessingId : owned[0] ?? null,
@@ -766,6 +821,21 @@ async function runQueueItem(
       console.log(`[Transcription] ${item.recording_id} stopped after cancel`)
       return
     }
+    // No engine could take it (refused key, model not prepared, host away): the
+    // recording waits for one. It is not failed and keeps its retries (27-nov-2026).
+    // A row that named its engine fails as before: the person who picked it sees why,
+    // and it never holds the default chain's recordings behind it (Kiro review).
+    if (!item.provider && error instanceof EngineChainExhaustedError && noEngineCouldTakeJob(error.attempts)) {
+      const reason = engineWaitReason(error.attempts)
+      holdQueueItemForEngine(item.id, reason)
+      updateRecordingTranscriptionStatus(item.recording_id, 'pending')
+      engineWait = { until: Date.now() + ENGINE_WAIT_RECHECK_MS, reason, settings: engineWaitSettings() }
+      console.warn(`[Transcription] ${item.recording_id}: ${reason}`)
+      const recWait = getRecordingById(item.recording_id)
+      emitActivityLog('warning', 'Transcription waiting for an engine', `${recWait?.filename ?? item.recording_id}: ${reason}`)
+      emitQueueState()
+      return
+    }
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     console.error('Transcription failed:', errorMessage)
 
@@ -845,7 +915,7 @@ function voicesRunLocally(): boolean {
  */
 async function maybeStartShortLane(): Promise<void> {
   if (getConfig().transcription.maxConcurrentRecordings !== 2) return
-  if (shortLane || !mainJob || queuePaused || cancelRequested) return
+  if (shortLane || !mainJob || queuePaused || cancelRequested || engineWait) return
   if (!isFeatureEnabled('transcription')) return
   if (mainJob.stage === 'voices') return
   const remaining = mainJob.estimateSeconds - (Date.now() - mainJob.startedAt) / 1000
@@ -1026,6 +1096,11 @@ async function processQueue(): Promise<void> {
     // handled by the active run's loop (which breaks after the current item);
     // every subsequent tick no-ops here until resume.
     if (queuePaused) return
+    // No engine could take the last recording: wait for one instead of failing the rest.
+    if (!engineWaitOver()) {
+      emitQueueState()
+      return
+    }
 
     const config = getConfig()
     const provider = config.transcription.provider || 'gemini'
@@ -1102,6 +1177,14 @@ async function processQueue(): Promise<void> {
     const failedItems = getQueueItems('failed')
     const now = Date.now()
     for (const item of failedItems) {
+      // Failed only because no engine could take it, before that waited (27-nov-2026):
+      // back to waiting, retries untouched.
+      if (!item.provider && failedOnlyForLackOfEngine(item.error_message, item.completed_at ?? null)) {
+        holdQueueItemForEngine(item.id, 'Waiting for a transcription engine')
+        updateRecordingTranscriptionStatus(item.recording_id, 'pending')
+        console.log(`[Transcription] ${item.id} failed only for lack of an engine; waiting for one`)
+        continue
+      }
       // B-TXN-003: Use typed property access instead of `as any` cast
       const retryCount = item.retry_count ?? 0
 
@@ -1190,6 +1273,8 @@ async function processQueue(): Promise<void> {
         mainJob = null
         emitQueueState()
       }
+      // The next recording would find the same engines missing.
+      if (engineWait) break
     }
 
     if (cancelRequested) {
@@ -1237,6 +1322,9 @@ export function onQueueDrained(listener: () => void): () => void {
  * Call after adding items to the queue for immediate processing.
  */
 export async function processQueueManually(): Promise<void> {
+  // Someone asked now (a Retry, a new recording): look at the engines again.
+  // A refused key stays skipped, so this costs no provider call.
+  engineWait = null
   return processQueue()
 }
 
@@ -2954,12 +3042,21 @@ async function transcribeThroughEngineChain(
         : step.provider === 'configured'
           ? transcribeRecording(recordingId, progressCallback, undefined, ownerRequested)
           : transcribeRecording(recordingId, progressCallback, undefined, ownerRequested, step),
-      unavailableReason: (step) => engineUnavailableReason(step, engineAvailabilityDeps),
+      unavailableReason: async (step) => {
+        const label = engineLabel(step)
+        return (runsOnGeminiKey(label) ? credentialRefusals.reason(label, geminiKeyFingerprint()) : null) ??
+          engineUnavailableReason(step, engineAvailabilityDeps)
+      },
       sleep: async (seconds) => {
         const until = Date.now() + seconds * 1000
         while (Date.now() < until && shouldContinue()) await new Promise((resolve) => setTimeout(resolve, 1000))
       },
-      record: (attempt) => recordEngineAttempt(canonicalId, queueItemId, filename, attempt),
+      record: (attempt) => {
+        if (attempt.outcome === 'failed' && attempt.errorClass === 'credentials' && runsOnGeminiKey(attempt.engine)) {
+          credentialRefusals.record(attempt.engine, geminiKeyFingerprint(), attempt.message ?? 'refused')
+        }
+        recordEngineAttempt(canonicalId, queueItemId, filename, attempt)
+      },
       describeSuccess: (outcome) => (outcome.status === 'completed' ? outcome.producedBy : undefined),
       shouldContinue,
     })

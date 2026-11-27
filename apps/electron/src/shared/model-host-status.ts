@@ -26,6 +26,8 @@ export interface ModelHostHealthReport {
   state: 'stopped' | 'ready' | 'paused' | 'busy'
   capabilities: string[]
   diarizationModels?: string[]
+  /** The ASR models whose spoken test passed on this host; the chain skips the others. */
+  asrModels?: string[]
   /** From host 0.6.0: Parakeet word timestamps for Fix times, only where Parakeet passed its spoken test. */
   alignmentModels?: string[]
   acceleration?: 'cuda' | 'cpu'

@@ -65,6 +65,18 @@ describe('engineUnavailableReason', () => {
       .toBeNull()
   })
 
+  it('skips a model the host has not prepared, without uploading anything (27-nov-2026)', async () => {
+    // Host 0.6.0 dropped Parakeet Ultra and Qwen 1.7B from its models; the chain uploaded to it anyway
+    // and every recording failed with "The worker has not advertised the selected ASR engine".
+    const prepared = { ...health('ready'), asrModels: ['nvidia/parakeet-tdt-0.6b-v3'] }
+    expect(await engineUnavailableReason({ provider: 'remote', model: 'Qwen/Qwen3-ASR-1.7B' }, deps({ checkHost: async () => prepared })))
+      .toBe('The Model Host has not prepared Qwen/Qwen3-ASR-1.7B')
+    expect(await engineUnavailableReason({ provider: 'remote', model: 'nvidia/parakeet-tdt-0.6b-v3' }, deps({ checkHost: async () => prepared })))
+      .toBeNull()
+    // A host too old to list its models is still tried; the route's capability check decides.
+    expect(await engineUnavailableReason({ provider: 'remote', model: 'Qwen/Qwen3-ASR-1.7B' }, deps())).toBeNull()
+  })
+
   it('skips local Cohere when the runner is missing, never asks the host for it', async () => {
     const checkHost = vi.fn()
     expect(await engineUnavailableReason({ provider: 'local', model: 'CohereLabs/cohere-transcribe-03-2026' },

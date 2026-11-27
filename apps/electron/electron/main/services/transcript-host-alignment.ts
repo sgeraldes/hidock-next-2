@@ -21,6 +21,24 @@ import type { SpeechSpan } from './transcript-time-aligner'
 /** Parakeet on the host's CPU hears a 15-minute section in well under a minute; past this the owner is kept waiting. */
 export const HOST_ALIGN_TIMEOUT_MS = 120_000
 
+/**
+ * Parakeet picks the language from what it hears. On a few seconds of quiet
+ * Spanish it heard English or nothing (Rec28, 27-nov-2026: a 14 s clip gave
+ * "Oh yes.", a 3.2 s one no words); with 30 s or more around the same lines it
+ * heard every word. The words outside the window cost the matcher little.
+ */
+export const HOST_ALIGN_MIN_SECONDS = 30
+
+/** The window with its padding, widened evenly to at least HOST_ALIGN_MIN_SECONDS and kept inside the recording. */
+export function hostAlignmentBounds(windowStart: number, windowEnd: number, durationSeconds: number | null): { start: number; seconds: number } {
+  const section = sectionBounds(windowStart, windowEnd, durationSeconds)
+  if (section.seconds >= HOST_ALIGN_MIN_SECONDS) return section
+  const length = durationSeconds ? Math.min(HOST_ALIGN_MIN_SECONDS, durationSeconds) : HOST_ALIGN_MIN_SECONDS
+  let start = Math.max(0, section.start - (length - section.seconds) / 2)
+  if (durationSeconds && start + length > durationSeconds) start = Math.max(0, durationSeconds - length)
+  return { start, seconds: length }
+}
+
 export interface HostFixDeps {
   settings: () => ModelHostSettings | null | Promise<ModelHostSettings | null>
   audioExists: (path: string) => boolean
@@ -70,7 +88,7 @@ export async function fixTimesOnModelHost(input: HostFixInput, deps: HostFixDeps
     const settings = await deps.settings()
     if (!settings) return { used: false, reason: 'This computer is not paired with a model host.' }
     if (!input.audioPath || !deps.audioExists(input.audioPath)) return { used: false, reason: 'The audio file is not on this computer.' }
-    const bounds = sectionBounds(input.window.start, input.window.end, input.durationSeconds)
+    const bounds = hostAlignmentBounds(input.window.start, input.window.end, input.durationSeconds)
     dir = await mkdtemp(join(tmpdir(), 'hidock-align-'))
     const clip = join(dir, 'section.wav')
     await deps.extract(input.audioPath, bounds.start, bounds.seconds, clip)

@@ -9,7 +9,10 @@ export const WAVEFORM_PEAKS = 1000
 export const WAVEFORM_SAMPLE_RATE = 8000
 export const WAVEFORM_MAX_CHANNELS = 8
 export const WAVEFORM_MAX_DURATION_SECONDS = 6 * 60 * 60
+/** FFmpeg diagnostics allowed before the audio metadata line; after it they are drained. */
 export const WAVEFORM_MAX_STDERR_BYTES = 64 * 1024
+/** Diagnostics kept after the metadata, for an error message. */
+const WAVEFORM_STDERR_TAIL_CHARS = 4000
 export const WAVEFORM_MAX_CHUNK_BYTES = 64 * 1024
 export const WAVEFORM_DECODE_TIMEOUT_MS = 10 * 60 * 1000
 export const WAVEFORM_MAX_QUEUED_JOBS = 3
@@ -171,6 +174,8 @@ export async function decodeWaveformFile(filePath: string, options: DecodeWavefo
   let killSent = false
   let stderr = ''
   let stderrBytes = 0
+  let metadataSettled = false
+  let stderrTail = ''
   let resolveMetadata!: (metadata: AudioMetadata) => void
   let rejectMetadata!: (error: Error) => void
   const metadataReady = new Promise<AudioMetadata>((resolve, reject) => {
@@ -197,9 +202,16 @@ export async function decodeWaveformFile(filePath: string, options: DecodeWavefo
     }
     child.stderr.on('data', (chunk: Buffer) => {
       stderrBytes += chunk.length
+      if (metadataSettled) {
+        // Past the metadata FFmpeg may warn on every frame: an 85-minute MP3 wrote
+        // 181 KB of "overread, skip" lines (Rec28, 27-nov-2026). The stream is
+        // drained; only its last part is kept, for an error message.
+        stderrTail = (stderrTail + chunk.toString('utf8')).slice(-WAVEFORM_STDERR_TAIL_CHARS)
+        return
+      }
       if (stderrBytes > WAVEFORM_MAX_STDERR_BYTES) {
-        stop('FFmpeg diagnostics exceeded 64 KiB')
-        rejectMetadata(new Error('FFmpeg diagnostics exceeded 64 KiB'))
+        stop('FFmpeg diagnostics exceeded 64 KiB before the audio metadata')
+        rejectMetadata(new Error('FFmpeg diagnostics exceeded 64 KiB before the audio metadata'))
         return
       }
       stderr += chunk.toString('utf8')
@@ -207,6 +219,8 @@ export async function decodeWaveformFile(filePath: string, options: DecodeWavefo
       // absent (MediaRecorder WebM) or inaccurate (VBR MP3 without Xing), so
       // duration is measured from decoded output frames below.
       if (/(?:^|\r?\n)[^\r\n]*Audio:[^\r\n]*\r?\n/.test(stderr)) {
+        metadataSettled = true
+        stderrTail = stderr.slice(-WAVEFORM_STDERR_TAIL_CHARS)
         try { resolveMetadata(parseAudioMetadata(stderr)) }
         catch (error) { rejectMetadata(error instanceof Error ? error : new Error(String(error))) }
       }
@@ -251,7 +265,7 @@ export async function decodeWaveformFile(filePath: string, options: DecodeWavefo
 
     const exit = await closed
     if (stopReason) throw new Error(stopReason)
-    if (exit.code !== 0) throw new Error(`FFmpeg exited ${exit.code ?? exit.signal}: ${stderr.slice(-1000)}`)
+    if (exit.code !== 0) throw new Error(`FFmpeg exited ${exit.code ?? exit.signal}: ${(metadataSettled ? stderrTail : stderr).slice(-1000)}`)
     if (carry.length || frameCount === 0) throw new Error('FFmpeg produced an empty or incomplete PCM stream')
     const durationSeconds = frameCount / WAVEFORM_SAMPLE_RATE
     channels = spreadPeakBins(channels, binSize, frameCount)
