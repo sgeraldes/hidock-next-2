@@ -11,6 +11,7 @@ Device reference: [model/version gates, recordings and native markers](../../doc
 - The chain skips a Model Host model the host has not prepared, instead of uploading to it and failing.
 - Fix times with Parakeet sends at least 30 seconds of audio around the lines. On a few seconds of quiet speech Parakeet heard the wrong language or nothing, and Fix times fell back to the speech stretches on this computer.
 - The waveform of a long recording no longer fails with "FFmpeg diagnostics exceeded 64 KiB": warnings FFmpeg writes while decoding are drained.
+- The Assistant answers when the Model Host's semantic model is not ready. It says the library search failed and why, instead of "Failed to process chat message", and still uses action items and meeting digests.
 
 ## 2026-11-26 | What plays or records, in the header; Fix times hears the words, on the Gamestation
 

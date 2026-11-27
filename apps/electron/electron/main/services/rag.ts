@@ -858,18 +858,32 @@ class RAGService {
       // 'reindex-pending' — the ACTIVE provider's partition is empty while other
       //   partitions hold chunks (provider just switched, reindex not done).
       let retrievalIssue: 'provider-failure' | 'reindex-pending' | null = null
+      // A query embedding that THROWS (27-nov-2026: "Remote semantic model is not
+      // ready" while the Model Host had not prepared its embedder) used to fail the
+      // whole chat with INTERNAL_ERROR. It is the same provider failure as an empty
+      // search over a populated partition, so the answer says retrieval failed.
+      const searchOrProviderFailure = async (run: () => Promise<SearchResult[]>): Promise<SearchResult[]> => {
+        try {
+          return await run()
+        } catch (error) {
+          retrievalIssue = 'provider-failure'
+          console.error('[RAG] Query embedding failed; answering without a library lookup:', error instanceof Error ? error.message : error)
+          return []
+        }
+      }
       if (context.meetingId) {
         // Search within specific meeting. The re-rank used to be a cosine loop
         // written out here over doc.embedding — a second copy of the store's own
         // cosineSimilarity. Scoring now happens next to the vectors, which is
         // what lets them live outside this process.
-        searchResults = await vectorStore.searchWithinMeeting(context.meetingId, message, 5)
+        const meetingId = context.meetingId
+        searchResults = await searchOrProviderFailure(() => vectorStore.searchWithinMeeting(meetingId, message, 5))
       } else {
         // Global search — over-fetch 3x so the per-recording diversity cap can
         // drop near-duplicate chunks from one dominant meeting without starving
         // the excerpt budget.
-        searchResults = await vectorStore.search(message, topK * 3)
-        if (searchResults.length === 0) {
+        searchResults = await searchOrProviderFailure(() => vectorStore.search(message, topK * 3))
+        if (searchResults.length === 0 && retrievalIssue === null) {
           const activeProvider = await getEmbeddingsService().activeProviderId()
           trace.embedding_provider = activeProvider
         const partitionCount = activeProvider ? vectorStore.getEligibleDocumentCount(activeProvider) : 0
