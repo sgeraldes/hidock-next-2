@@ -286,6 +286,37 @@ describe('decodeWaveformFile child lifecycle', () => {
     expect(spawnedArguments[0]).toContain('-nostats')
   })
 
+  it('keeps decoding through decoder warnings after the metadata, holding only a bounded part of them (27-nov-2026)', async () => {
+    // Rec28 (85 min of MP3): FFmpeg wrote 181,802 bytes of "overread, skip" warnings while decoding,
+    // and the waveform failed with "FFmpeg diagnostics exceeded 64 KiB".
+    const filePath = join(tempRoot(), 'fake-source.wav')
+    writeFileSync(filePath, 'synthetic placeholder')
+    const warning = Buffer.from('[mp3float @ 0000000002a4ba00] overread, skip -5 enddists: -2 -2\n')
+    const children: FakeChild[] = []
+    const spawnChild = ((..._args: unknown[]) => {
+      const child = new FakeChild()
+      children.push(child)
+      setImmediate(async () => {
+        child.stderr.write(oneSecondStereoMetadata)
+        for (let i = 0; i < 3000; i++) child.stderr.write(warning)
+        child.stdout.end(fakePcm(0.5))
+        child.stderr.end()
+        await new Promise(resolve => setImmediate(resolve))
+        child.exitCode = 0
+        child.emit('close', 0, null)
+      })
+      return child as unknown as ReturnType<typeof import('child_process').spawn>
+    }) as unknown as typeof import('child_process').spawn
+
+    const decoded = await decodeWaveformFile(filePath, {
+      ffmpegPath: 'mock-ffmpeg', spawnChild, lowerPriority: () => undefined, timeoutMs: 5000
+    })
+    expect(3000 * warning.length).toBeGreaterThan(64 * 1024 * 2)
+    expect(decoded.durationSeconds).toBeCloseTo(1, 3)
+    expect(Math.max(...decoded.channels[1])).toBeCloseTo(0.5, 3)
+    expect(children[0].killCount).toBe(0)
+  })
+
   it('kills the child on stderr overflow, oversized PCM chunks, timeout, and cancellation', async () => {
     const filePath = join(tempRoot(), 'fake-source.wav')
     writeFileSync(filePath, 'synthetic placeholder')
@@ -308,7 +339,7 @@ describe('decodeWaveformFile child lifecycle', () => {
 
     await expect(decodeWaveformFile(filePath, {
       ffmpegPath: 'mock-ffmpeg', spawnChild, lowerPriority: () => undefined, timeoutMs: 2000
-    })).rejects.toThrow(/diagnostics exceeded/)
+    })).rejects.toThrow(/diagnostics exceeded 64 KiB before the audio metadata/)
     await expect(decodeWaveformFile(filePath, {
       ffmpegPath: 'mock-ffmpeg', spawnChild, lowerPriority: () => undefined, timeoutMs: 2000
     })).rejects.toThrow(/stdout chunk exceeded/)

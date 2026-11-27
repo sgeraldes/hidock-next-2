@@ -41,7 +41,8 @@ export interface TranscriptionItem {
 
 /** Queue-processor state mirrored from the main process (source of truth). */
 export interface QueueProcessorState {
-  pauseReason?: 'no_gemini_key' | null
+  pauseReason?: 'no_gemini_key' | 'no_engine_available' | null
+  pauseDetail?: string | null
   paused: boolean
   isProcessing: boolean
   processingId: string | null
@@ -90,7 +91,9 @@ export interface TranscriptionQueueStore {
    * main owns the truth; this is a reflection so the dock can flip Pause↔Resume.
    */
   paused: boolean
-  pauseReason: 'no_gemini_key' | null
+  pauseReason: 'no_gemini_key' | 'no_engine_available' | null
+  /** Why the queue waits for an engine, engine by engine. */
+  pauseDetail: string | null
   /** recording_id currently being transcribed in main (null when idle). */
   processingId: string | null
 
@@ -139,6 +142,7 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
     maxConcurrent: 2,
     paused: false,
     pauseReason: null,
+    pauseDetail: null,
     processingId: null,
 
     // Actions
@@ -430,7 +434,7 @@ export const useTranscriptionStore = create<TranscriptionQueueStore>()(
     },
 
     applyQueueState: (state) => {
-      set({ paused: state.paused, pauseReason: state.pauseReason ?? null, processingId: state.processingId })
+      set({ paused: state.paused, pauseReason: state.pauseReason ?? null, pauseDetail: state.pauseDetail ?? null, processingId: state.processingId })
     },
 
     // Queries

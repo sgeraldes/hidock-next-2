@@ -8877,6 +8877,14 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
   }
 }
 
+/**
+ * Back to pending because no engine could take the recording: the reason stays
+ * on the row for Operations, and retry_count does not move (a wait is not a retry).
+ */
+export function holdQueueItemForEngine(id: string, reason: string): void {
+  run(`UPDATE transcription_queue SET status = 'pending', progress = 0, completed_at = NULL, error_message = ? WHERE id = ?`, [reason, id])
+}
+
 export function updateQueueProgress(id: string, progress: number): void {
   // Clamp progress between 0 and 100
   const clampedProgress = Math.max(0, Math.min(100, Math.round(progress)))

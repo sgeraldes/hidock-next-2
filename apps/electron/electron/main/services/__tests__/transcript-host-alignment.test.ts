@@ -39,6 +39,32 @@ describe('fixTimesOnModelHost', () => {
     expect(existsSync(dirname(d.clips[0]))).toBe(false)
   })
 
+  it('sends Parakeet at least 30 s around a short window, so it hears the language (27-nov-2026)', async () => {
+    // Rec28: the window 0-13 s went as a 14 s clip and Parakeet heard "Oh yes." instead of
+    // "Hola, Manuel, ¿cómo estás?"; a 3.2 s clip at 55:49 came back with no words. With 45 s
+    // around them the same host heard every word in Spanish.
+    const short = { start: 3349.85, end: 3351.05 }
+    const d = deps({ align: vi.fn(async () => ({ modelVersion: 'p', words: [
+      { word: 'hola', start: 14.2, end: 14.5 }, { word: 'manuel', start: 14.6, end: 15 },
+      { word: 'como', start: 15.1, end: 15.3 }, { word: 'estas', start: 15.4, end: 15.8 }] })) })
+    const outcome = await fixTimesOnModelHost({ recordingId: 'rec-1', audioPath: 'F:/audio/rec.hda', lines, window: short, durationSeconds: 5119 }, d)
+    const [, start, seconds] = vi.mocked(d.extract).mock.calls[0]
+    expect(seconds).toBeCloseTo(30, 6)
+    expect(start).toBeCloseTo(3335.45, 6)
+    // The heard words come back on the clip's clock and are moved by where the clip started.
+    expect(outcome).toMatchObject({ used: true })
+    if (outcome.used) expect(outcome.alignment.starts[0]).toBeCloseTo(3349.85, 2)
+  })
+
+  it('keeps the 30 s clip inside the recording at its start and its end', async () => {
+    const first = deps()
+    await fixTimesOnModelHost({ recordingId: 'rec-1', audioPath: 'a.hda', lines, window: { start: 0, end: 13 }, durationSeconds: 5119 }, first)
+    expect(vi.mocked(first.extract).mock.calls[0].slice(1, 3)).toEqual([0, 30])
+    const last = deps()
+    await fixTimesOnModelHost({ recordingId: 'rec-1', audioPath: 'a.hda', lines, window: { start: 590, end: 595 }, durationSeconds: 600 }, last)
+    expect(vi.mocked(last.extract).mock.calls[0].slice(1, 3)).toEqual([570, 30])
+  })
+
   it('does not touch the host when this computer is not paired with one', async () => {
     const d = deps({ settings: () => null })
     const outcome = await fixTimesOnModelHost({ recordingId: 'rec-1', audioPath: 'a.hda', lines, window, durationSeconds: 600 }, d)

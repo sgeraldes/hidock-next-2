@@ -57,6 +57,11 @@ export async function engineUnavailableReason(step: EngineStep, deps: Availabili
     if (health.state === 'paused' || health.state === 'stopped') {
       return `The Model Host is ${health.state}${health.reason ? `: ${health.reason}` : ''}`
     }
+    // Hosts since 0.3 list the ASR models whose spoken test passed. One not listed would be
+    // refused at the route's capability check; skipping it here records why (27-nov-2026).
+    if (step.model && Array.isArray(health.asrModels) && !health.asrModels.includes(step.model)) {
+      return `The Model Host has not prepared ${step.model}`
+    }
     return null
   }
   if (step.model?.startsWith('microsoft/VibeVoice')) return null

@@ -544,6 +544,15 @@ it('shows a missing Gemini key even when the queue is empty', () => {
   expect(screen.getAllByText('Transcription paused: no Gemini key').length).toBeGreaterThan(0)
 })
 
+it('says the queue waits for an engine, and why, instead of listing failures (27-nov-2026)', () => {
+  setupDefaultMocks()
+  const pauseDetail = 'Waiting for a transcription engine. configured:gemini: The provider refused this key (402); remote:Qwen/Qwen3-ASR-1.7B: The Model Host has not prepared Qwen/Qwen3-ASR-1.7B'
+  vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector({ ...makeTranscriptionState(new Map()), pauseReason: 'no_engine_available', pauseDetail }))
+  render(<OperationsPanel sidebarOpen={false} />)
+  expect(screen.getByTestId('operations-waiting-engine')).toHaveAttribute('title', expect.stringContaining('has not prepared Qwen/Qwen3-ASR-1.7B'))
+  expect(screen.getByRole('button', { name: /Transcription waiting for an engine/ })).toBeInTheDocument()
+})
+
 it('shows the missing Gemini key visibly in the collapsed sidebar (review of #173)', () => {
   setupDefaultMocks()
   vi.mocked(useTranscriptionStore).mockImplementation((selector: any) => selector({ ...makeTranscriptionState(new Map()), pauseReason: 'no_gemini_key' }))

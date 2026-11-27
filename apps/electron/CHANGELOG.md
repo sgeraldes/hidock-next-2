@@ -4,9 +4,13 @@ Each entry is one day of merged work. The Releases page in Settings reads this f
 
 Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
 
-## 2026-11-27 | Model Host 0.6.1: Fix times on the Gamestation works
+## 2026-11-27 | Model Host 0.6.1: Fix times on the Gamestation works; recordings wait for an engine
 
 - Model Host 0.6.1 fixes word alignment, which failed on every job in 0.6.0 because its worker could not find the Parakeet code next to it. Until the update reached the Gamestation, Fix times placed the lines from the speech on this computer. HiDock sends the update; nothing is done there by hand.
+- When no transcription engine can take a recording (Gemini refuses the key, the Model Host has not prepared the model, the host is away), the recording waits instead of failing. Operations says "Transcription waiting for an engine" and names each engine with its reason. A refused Gemini key is not called again until the key changes or an hour passes. Recordings that had failed this way go back to waiting by themselves.
+- The chain skips a Model Host model the host has not prepared, instead of uploading to it and failing.
+- Fix times with Parakeet sends at least 30 seconds of audio around the lines. On a few seconds of quiet speech Parakeet heard the wrong language or nothing, and Fix times fell back to the speech stretches on this computer.
+- The waveform of a long recording no longer fails with "FFmpeg diagnostics exceeded 64 KiB": warnings FFmpeg writes while decoding are drained.
 
 ## 2026-11-26 | What plays or records, in the header; Fix times hears the words, on the Gamestation
 

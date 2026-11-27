@@ -55,9 +55,19 @@ export interface ClassifiedError {
   nextEngineMayHelp: boolean
 }
 
+const PAYMENT_REFUSAL = new RegExp([
+  '\b402\b',
+  'prepayment credits are depleted',
+  'insufficient (?:prepaid )?credits',
+  'credit balance (?:is )?(?:depleted|exhausted)',
+].join('|'), 'i')
+
 const RULES: Array<{ test: RegExp; class: TranscriptionErrorClass }> = [
   { test: /cancell?ed|became ineligible|no longer eligible|TranscriptionCancelled/i, class: 'cancelled' },
   { test: /Recording not found|no local file|Recording file not found|personal, deleted|is not eligible/i, class: 'recording' },
+  // Billing exhaustion can also carry RESOURCE_EXHAUSTED. It is not a
+  // temporary rate limit and waiting cannot restore prepaid credits.
+  { test: PAYMENT_REFUSAL, class: 'credentials' },
   { test: /\b429\b|rate limit|quota|RESOURCE_EXHAUSTED|too many requests/i, class: 'quota' },
   { test: /API key not configured|API key not valid|invalid api key|PERMISSION_DENIED|\b401\b|\b403\b|billing|credit/i, class: 'credentials' },
   { test: /not advertised the selected ASR engine|Pair (a|with the) (remote worker|model host)|runner not found|failed to spawn|No module named|ECONNREFUSED|stepped aside|step-aside|host (is )?(paused|unavailable)|Remote transcription requires HTTPS/i, class: 'unavailable' },

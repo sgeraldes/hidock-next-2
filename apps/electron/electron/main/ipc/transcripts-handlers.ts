@@ -346,7 +346,9 @@ export function registerTranscriptsHandlers(): void {
         if (host.used) {
           review = { action, indices: finding.lines, alignment: host.alignment, method: 'model-host-words' }
         } else {
-          console.info(`[TranscriptTiming] Fix times on this computer for ${recordingId}: ${host.reason}`)
+          // A warning, so the reason reaches the app log when the owner asked for the host (27-nov-2026).
+          const log = useHost ? console.warn : console.info
+          log(`[TranscriptTiming] Fix times on this computer for ${recordingId}: ${host.reason}`)
           const spans = state.evidence.spansIn(window.start, window.end)
           if (!spans) return error('VALIDATION_ERROR', `This recording has no speech evidence to place the lines on. ${host.reason}`, { lowConfidence: true, hostReason: host.reason })
           const alignment = alignToSpeech(lines, window, spans)

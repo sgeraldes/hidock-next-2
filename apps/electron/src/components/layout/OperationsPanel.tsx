@@ -68,6 +68,13 @@ interface OperationsPanelProps {
  * the words go to the tooltip and screen readers (owner, 2-oct-2026). The row
  * keeps the file name, so it still says WHICH file is in that state.
  */
+/** Why the queue holds its recordings without the owner pausing it, in words. Null when it does not. */
+function queuePauseLabel(reason: 'no_gemini_key' | 'no_engine_available' | null | undefined): string | null {
+  if (reason === 'no_gemini_key') return 'Transcription paused: no Gemini key'
+  if (reason === 'no_engine_available') return 'Transcription waiting for an engine'
+  return null
+}
+
 function StateMark({ label, waiting, percent }: { label: string; waiting?: boolean; percent?: number }) {
   const name = percent !== undefined ? `${label}, ${percent}%` : label
   return (
@@ -189,6 +196,8 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
   // One switch for downloads + transcriptions, shared with the Library header.
   const { paused: processingPaused, transcriptionPaused, toggle: toggleProcessing } = useProcessingPause()
   const pauseReason = useTranscriptionStore((s) => s.pauseReason)
+  const pauseDetail = useTranscriptionStore((s) => s.pauseDetail)
+  const pauseLabel = queuePauseLabel(pauseReason)
   const applyQueueState = useTranscriptionStore((s) => s.applyQueueState)
   const recordings = useUnifiedRecordings()
   const { cancelTranscription, cancelDownload, cancelAllDownloads, retryFailedDownloads } = useOperations()
@@ -346,11 +355,12 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
           <button
             type="button"
             onClick={openOverlay}
-            aria-label={`Operations: ${pauseReason === 'no_gemini_key' ? 'Transcription paused: no Gemini key, ' : ''}${activeTranscriptions} transcribing${errorCount ? `, ${errorCount} error(s)` : ''}`}
+            aria-label={`Operations: ${pauseLabel ? `${pauseLabel}, ` : ''}${activeTranscriptions} transcribing${errorCount ? `, ${errorCount} error(s)` : ''}`}
             className="relative flex w-full flex-col items-center gap-1 rounded-md py-1 text-slate-300 hover:bg-slate-800"
           >
-            {pauseReason === 'no_gemini_key' && (
-              <span className="flex items-center text-amber-400" data-testid="operations-paused-no-key" title="Transcription paused: no Gemini key">
+            {pauseLabel && (
+              <span className="flex items-center text-amber-400" data-testid={pauseReason === 'no_gemini_key' ? 'operations-paused-no-key' : 'operations-waiting-engine'}
+                title={pauseDetail ? `${pauseLabel}. ${pauseDetail}` : pauseLabel}>
                 <Pause className="h-3 w-3" aria-hidden="true" />
               </span>
             )}
@@ -378,7 +388,7 @@ export function OperationsPanel({ sidebarOpen }: OperationsPanelProps) {
 
   // Expanded sidebar: activity + honest indeterminate stage + error count.
   const primaryLabel =
-    pauseReason === 'no_gemini_key' ? 'Transcription paused: no Gemini key' :
+    pauseLabel ? pauseLabel :
     activeTranscriptions > 0
       ? `${activeTranscriptions} transcribing`
       : hasDownloads
@@ -491,6 +501,8 @@ function OperationsOverlay({
   onRetryFailedDownloads
 }: OperationsOverlayProps) {
   const pauseReason = useTranscriptionStore((s) => s.pauseReason)
+  const pauseDetail = useTranscriptionStore((s) => s.pauseDetail)
+  const pauseLabel = queuePauseLabel(pauseReason)
   const [copiedErrorId, setCopiedErrorId] = useState<string | null>(null)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   const [earlierOpen, setEarlierOpen] = useState(false)
@@ -548,7 +560,12 @@ function OperationsOverlay({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-label="Operations detail">
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
-        {pauseReason === 'no_gemini_key' && <p className="px-4 py-2 text-xs text-amber-300">Transcription paused: no Gemini key</p>}
+        {pauseLabel && (
+          <div className="px-4 py-2 text-xs text-amber-300">
+            <p>{pauseLabel}</p>
+            {pauseReason === 'no_engine_available' && pauseDetail && <p className="mt-1 text-amber-200/80" data-testid="operations-engine-wait-detail">{pauseDetail}</p>}
+          </div>
+        )}
         <div className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-purple-400" />
