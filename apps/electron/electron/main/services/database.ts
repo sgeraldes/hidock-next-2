@@ -15,7 +15,7 @@ import { getDatabasePath } from './file-storage'
 // Re-exported so consumers (e.g. vector-store's binary cache) can locate the
 // DB file without pulling the file-storage module graph into their tests.
 export { getDatabasePath }
-import { DatabaseEngine, getTableColumns, type BootProgress, type ExternalBackup, type SqlJsDatabase } from '@hidock/database'
+import { DatabaseEngine, getTableColumns, type BootProgress, type DatabaseBackupExecutor, type ExternalBackup, type SqlJsDatabase } from '@hidock/database'
 // The namespace, not a named import: a stale dist that predates the constant
 // has no such export, and the guard must read that as 0 instead of failing to link.
 import * as databaseEngineModule from '@hidock/database'
@@ -4546,6 +4546,17 @@ function repairPhase(): void {
 /** Set by initializeDatabase from the running app; NULL in rows when unknown. */
 let databaseAppVersion: string | null = null
 
+/**
+ * Who copies the library for a backup. In main it is the backup utility
+ * process; in the database process it is a request to main, which forks that
+ * same utility process (a utility process cannot fork one itself).
+ */
+let databaseBackupExecutor: DatabaseBackupExecutor = runDatabaseBackup
+
+export function setDatabaseBackupExecutor(executor: DatabaseBackupExecutor): void {
+  databaseBackupExecutor = executor
+}
+
 const engine = new DatabaseEngine({
   betterSqlite3: Database,
   dbPathProvider: getDatabasePath,
@@ -4565,7 +4576,7 @@ const engine = new DatabaseEngine({
   // synced (the deletion paths declare it with runDurableTransaction).
   durableTables: ['deletion_journal', 'purged_files'],
   backupOnBoot: { keep: 3 },
-  backupExecutor: runDatabaseBackup,
+  backupExecutor: (request, options) => databaseBackupExecutor(request, options),
   deferBackupOnBoot: true,
   externalBackups: listHourlyBackups,
 })

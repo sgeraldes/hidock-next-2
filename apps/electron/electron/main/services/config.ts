@@ -105,6 +105,9 @@ function encryptSensitive(value: string): string {
  */
 const undecryptedSecrets = new Map<string, string>()
 
+/** Secret fields of the transcription section: decrypted on load, never sent to the database process. */
+const SECRET_TRANSCRIPTION_KEYS = ['jevApiKey', 'geminiApiKey', 'localAsrHfToken', 'modelHostToken', 'museVoiceApiKey', 'maiTranscribeApiKey'] as const
+
 function decryptSensitive(value: string, field: string): string {
   undecryptedSecrets.delete(field)
   if (!value.startsWith('__enc__')) return value
@@ -723,7 +726,7 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
       if (savedConfig.calendar?.icsUrl) {
         savedConfig.calendar.icsUrl = decryptSensitive(savedConfig.calendar.icsUrl, 'calendar.icsUrl')
       }
-      for (const key of ['jevApiKey', 'geminiApiKey', 'localAsrHfToken', 'modelHostToken', 'museVoiceApiKey', 'maiTranscribeApiKey'] as const) {
+      for (const key of SECRET_TRANSCRIPTION_KEYS) {
         const value = savedConfig.transcription?.[key]
         if (typeof value === 'string' && value) {
           savedConfig.transcription[key] = decryptSensitive(value, `transcription.${key}`)
@@ -763,6 +766,48 @@ export async function initializeConfig(options: { persist?: boolean } = {}): Pro
   } catch (error) {
     console.error('Error loading config:', error)
     config = { ...DEFAULT_CONFIG }
+  }
+}
+
+/**
+ * The config for the database process: a structured-cloneable copy with every
+ * secret removed. The process reads settings (data folder, quality rules,
+ * calendar window) and never calls a provider.
+ */
+export function configSnapshotForDatabaseProcess(): AppConfig {
+  const snapshot = structuredClone(config)
+  if (snapshot.calendar) snapshot.calendar = { ...snapshot.calendar, icsUrl: '' }
+  if (snapshot.transcription) {
+    const transcription = { ...snapshot.transcription } as Record<string, unknown>
+    for (const key of SECRET_TRANSCRIPTION_KEYS) if (key in transcription) transcription[key] = ''
+    snapshot.transcription = transcription as unknown as AppConfig['transcription']
+  }
+  return snapshot
+}
+
+/** In the database process: take main's snapshot as the config. Nothing is written to disk. */
+export function applyConfigSnapshot(snapshot: AppConfig): void {
+  config = deepMerge(DEFAULT_CONFIG, snapshot)
+  applyRagSettings(config)
+  applyQualityRules(config)
+  applyCalendarWindow(config)
+}
+
+const configSavedListeners = new Set<() => void>()
+
+/** Called after every save that changed the config in memory (the database process follows it). */
+export function onConfigSaved(listener: () => void): () => void {
+  configSavedListeners.add(listener)
+  return () => configSavedListeners.delete(listener)
+}
+
+function notifyConfigSaved(): void {
+  for (const listener of configSavedListeners) {
+    try {
+      listener()
+    } catch (error) {
+      console.warn('[Config] A config listener failed:', error)
+    }
   }
 }
 
@@ -894,6 +939,8 @@ export async function saveConfig(newConfig: Partial<AppConfig>): Promise<void> {
     config = prevConfig
     throw writeErr
   }
+
+  notifyConfigSaved()
 
   if (keyChangeFailed) {
     throw new Error(

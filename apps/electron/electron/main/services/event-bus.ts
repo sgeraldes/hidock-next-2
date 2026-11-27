@@ -198,6 +198,22 @@ class DomainEventBus extends EventEmitter {
   }
 
   /**
+   * In the database process there is no window and nobody listens: every
+   * event goes to main, which emits it on its own bus (database-process.ts).
+   */
+  private forwarder: ((event: DomainEvent) => void) | null = null
+
+  setForwarder(forwarder: ((event: DomainEvent) => void) | null): void {
+    this.forwarder = forwarder
+  }
+
+  /** With a forwarder, main may be listening: an emitter that checks first must still emit. */
+  override listenerCount(eventName: string | symbol, listener?: (...args: any[]) => void): number {
+    const local = super.listenerCount(eventName, listener)
+    return this.forwarder ? Math.max(1, local) : local
+  }
+
+  /**
    * Emit a domain event to both internal listeners and renderer process
    */
   emitDomainEvent<T extends DomainEvent>(event: T): void {
@@ -209,6 +225,14 @@ class DomainEventBus extends EventEmitter {
     // Emit to internal listeners
     this.emit(event.type, enrichedEvent)
     this.emit('*', enrichedEvent) // Wildcard listener for all events
+
+    if (this.forwarder) {
+      try {
+        this.forwarder(enrichedEvent)
+      } catch (error) {
+        console.warn(`[EventBus] Could not forward ${event.type} to main:`, error)
+      }
+    }
 
     // Broadcast to renderer if available (sanitized)
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
