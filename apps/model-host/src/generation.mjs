@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { cpus, freemem, totalmem } from 'node:os'
 import { readFile, stat, readdir } from 'node:fs/promises'
 import { hasNativeCudaProcess } from './realtime-native-runtime.mjs'
+import { fingerprintMatchesAsync, sourceDigest } from './source-fingerprint.mjs'
 export const GENERATION_MODEL = 'Qwen/Qwen3-8B-GGUF'
 export const GENERATION_VERSION = '7c41481f57cb95916b40956ab2f0b139b296d974:Q4_K_M:llama-b11560'
 export const GENERATION_SHA = 'd98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785'
@@ -25,14 +26,18 @@ export function validateGenerationRequest(r) {
     min_p:0, presence_penalty:1.5, chat_template_kwargs:{enable_thinking:false},
     ...(r.jsonMode ? {response_format:{type:'json_object'}} : {}) }
 }
-export async function generationFingerprint(root) {
-  const p=generationPaths(root), source=dirname(fileURLToPath(import.meta.url)), files=[p.model, ...((await readdir(dirname(p.exe))).filter(n=>/\.(dll|exe)$/i.test(n)).sort().map(n=>join(dirname(p.exe),n))),join(source,'generation_supervisor.py'),join(source,'generation.mjs')]
-  return JSON.stringify(await Promise.all(files.map(async f=>{const s=await stat(f);return [f,s.size,s.mtimeMs]})))
+/** The model and runtime binaries by size and time, the host's own scripts by content:
+ * an update rewrites the scripts, so their time changes even when the code does not. */
+export async function generationFingerprint(root, form='lf') {
+  const p=generationPaths(root), source=dirname(fileURLToPath(import.meta.url)), files=[p.model, ...((await readdir(dirname(p.exe))).filter(n=>/\.(dll|exe)$/i.test(n)).sort().map(n=>join(dirname(p.exe),n)))]
+  const binaries=await Promise.all(files.map(async f=>{const s=await stat(f);return [f,s.size,s.mtimeMs]}))
+  const scripts=['generation_supervisor.py','generation.mjs'].map(name=>[name,sourceDigest(join(source,name),form)])
+  return JSON.stringify([...binaries,...scripts])
 }
 export async function generationReadiness(root) {
   const base={ready:false,model:GENERATION_MODEL,modelVersion:GENERATION_VERSION,maxContextTokens:8192,maxOutputTokens:2048}
   try { const p=JSON.parse(await readFile(generationPaths(root).proof,'utf8'))
-    return {...base,ready:p.modelVersion===GENERATION_VERSION && p.device==='cuda' && p.cleanShutdown===true && p.fingerprint===await generationFingerprint(root)}
+    return {...base,ready:p.modelVersion===GENERATION_VERSION && p.device==='cuda' && p.cleanShutdown===true && await fingerprintMatchesAsync(p.fingerprint,form=>generationFingerprint(root,form))}
   } catch {return base}
 }
 export async function generationJsonFetch(url, options, signal) {

@@ -141,8 +141,18 @@ describe('TranscriptTimingReview: Fix times on the model host', () => {
     reviewTiming.mockResolvedValue({ success: true, data: { fullText: 'x', segments: [], wordCount: 1 } })
     render(<Harness />)
     fireEvent.click(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' }))
-    expect(screen.getByText(/sends only this stretch of audio, about 3 s with a second on each side, to the model host/)).toBeInTheDocument()
+    // A 1 s window goes out as 30 s since #202, so Parakeet can tell the language.
+    expect(screen.getByText(/sends only about 30 s of audio around these lines to the model host/)).toBeInTheDocument()
+    expect(screen.getByText(/Shorter stretches go out as 30 s, or the whole recording when it is shorter, so Parakeet/)).toBeInTheDocument()
     await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: hostRun.id, useHost: true }))
+    // The saved fix reloads the review; wait for it so no update lands after the test.
+    await waitFor(() => expect(getTiming).toHaveBeenCalledTimes(2))
+  })
+
+  it('counts a long window with its second on each side', async () => {
+    getTiming.mockResolvedValue({ success: true, data: assessment({ findings: [{ ...hostRun, windowStart: 3300, windowEnd: 3340.4 }], wordAlignment: true }) })
+    render(<Harness />)
+    expect(await screen.findByText(/sends only about 42 s of audio around these lines/)).toBeInTheDocument()
   })
 
   it('keeps the computer-only fix as its own choice when the host can align too (CodeRabbit review of #198)', async () => {
@@ -152,6 +162,8 @@ describe('TranscriptTimingReview: Fix times on the model host', () => {
     expect(await screen.findByRole('button', { name: 'Fix times with Parakeet on the model host' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Fix times (from 0:04.9)' }))
     await waitFor(() => expect(reviewTiming).toHaveBeenCalledWith({ recordingId: 'rec-28', fingerprint: 'f'.repeat(40), action: 'fix_times', findingId: odd.id }))
+    // The saved fix reloads the review; wait for it so no update lands after the test.
+    await waitFor(() => expect(getTiming).toHaveBeenCalledTimes(2))
   })
 
   it('keeps the untried host button after the computer-only fix refuses (CodeRabbit review of #198)', async () => {

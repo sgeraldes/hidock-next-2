@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
-  OVERLAP_SECONDS, TIMING_CLASSIFICATION_LABELS, TIMING_FIX_METHOD_LABELS, TIMING_KIND_LABELS,
-  type TimingAssessment, type TimingFinding, type TimingSegment
+  HOST_ALIGN_MIN_SECONDS, OVERLAP_SECONDS, TIMING_CLASSIFICATION_LABELS, TIMING_FIX_METHOD_LABELS, TIMING_KIND_LABELS,
+  hostAlignmentSeconds, type TimingAssessment, type TimingFinding, type TimingSegment
 } from '@/shared/transcript-timing'
 import type { TranscriptContentUpdate } from './TranscriptViewer'
 import { formatTimestamp } from '../utils/formatTimestamp'
@@ -188,7 +188,8 @@ export function TranscriptTimingReview({ recordingId, segments = [], review, onJ
           </div>
           {hostFix && hostRefused !== current.id && current.windowStart !== null && current.windowEnd !== null && (
             <p className="text-muted-foreground">
-              Fix times with Parakeet sends only this stretch of audio, about {Math.round(current.windowEnd - current.windowStart + 2)} s with a second on each side, to the model host, where Parakeet hears the words; the transcript stays here.
+              Fix times with Parakeet sends only about {Math.round(hostAlignmentSeconds(current.windowStart, current.windowEnd))} s of audio around {current.lines.length === 1 ? 'this line' : 'these lines'} to the model host, where Parakeet hears the words; the transcript stays here.
+              Shorter stretches go out as {HOST_ALIGN_MIN_SECONDS} s, or the whole recording when it is shorter, so Parakeet can tell the language.
               If the host does not answer, the times come from the speech on this computer.
             </p>
           )}

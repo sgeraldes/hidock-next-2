@@ -17,17 +17,12 @@ import type { RemoteJobIdentity, RemoteJobStore } from './remote-worker-jobs'
 import { extractWithFfmpeg, sectionBounds } from './transcript-section-transcription'
 import { alignLinesToWords, type WordAlignmentResult } from './transcript-word-aligner'
 import type { SpeechSpan } from './transcript-time-aligner'
+import { HOST_ALIGN_MIN_SECONDS } from '../../../src/shared/transcript-timing'
 
 /** Parakeet on the host's CPU hears a 15-minute section in well under a minute; past this the owner is kept waiting. */
 export const HOST_ALIGN_TIMEOUT_MS = 120_000
 
-/**
- * Parakeet picks the language from what it hears. On a few seconds of quiet
- * Spanish it heard English or nothing (Rec28, 27-nov-2026: a 14 s clip gave
- * "Oh yes.", a 3.2 s one no words); with 30 s or more around the same lines it
- * heard every word. The words outside the window cost the matcher little.
- */
-export const HOST_ALIGN_MIN_SECONDS = 30
+export { HOST_ALIGN_MIN_SECONDS }
 
 /** The window with its padding, widened evenly to at least HOST_ALIGN_MIN_SECONDS and kept inside the recording. */
 export function hostAlignmentBounds(windowStart: number, windowEnd: number, durationSeconds: number | null): { start: number; seconds: number } {

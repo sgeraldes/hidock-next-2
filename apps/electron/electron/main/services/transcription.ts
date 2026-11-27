@@ -9,6 +9,7 @@ import {
   ENGINE_WAIT_RECHECK_MS,
   engineWaitReason,
   failedOnlyForLackOfEngine,
+  fileRefusalStore,
   noEngineCouldTakeJob,
 } from './transcription-engine-wait'
 import { engineRouteInput, engineUnavailableReason } from './transcription-engine-routing'
@@ -215,7 +216,7 @@ import {
 } from './database'
 import { addActiveTranscription, getActiveTranscriptions, removeActiveTranscription } from './transcription-activity'
 import { resolveSpeakerEngine } from './speaker-engines'
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { emitActivityLog } from './activity-log'
 import { isRecordingEligible, isRecordingTranscribable } from './recording-eligibility'
 import { getVectorStore } from './vector-store'
@@ -458,8 +459,11 @@ let missingGeminiKeyWarned = false
 /**
  * Gemini keys the provider refused (402, no credit): the chain skips Gemini
  * with the same key instead of calling it for every recording (27-nov-2026).
+ * Stored by key fingerprint in userData, so a restart within the hour does not
+ * spend one more refused call. The path is resolved on first use.
  */
-const credentialRefusals = new CredentialRefusals()
+const credentialRefusals = new CredentialRefusals(undefined,
+  fileRefusalStore(() => join(app.getPath('userData'), 'transcription-credential-refusals.json')))
 
 /** Chain steps that run on the Gemini key. An owner's explicit engine pick (`requested`) is never skipped. */
 function runsOnGeminiKey(label: string): boolean {
@@ -483,7 +487,7 @@ function engineWaitSettings(): string {
     credentialFingerprint(t.modelHostToken), geminiKeyFingerprint()])
 }
 
-/** Forget the wait and every refused key, as a restart does. */
+/** Forget the wait and every refused key, the stored ones too. */
 export function resetEngineWait(): void {
   engineWait = null
   credentialRefusals.clear()

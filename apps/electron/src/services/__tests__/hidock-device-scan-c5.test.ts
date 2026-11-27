@@ -19,7 +19,7 @@
  * endorsement of the design — only a snapshot of current behavior.
  */
 
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
 import type { FileInfo } from '../jensen'
 
 vi.mock('../qa-monitor', () => ({
@@ -271,6 +271,41 @@ describe('HiDockDeviceService - listRecordings scan lifecycle gaps (C5 Phase 0)'
       expect(mockJensen.listFiles).toHaveBeenCalledTimes(2)
       expect(result1).toHaveLength(2)
       expect(result2).toHaveLength(3)
+    })
+  })
+
+  describe('a list refused while a download owns the device (27-nov-2026)', () => {
+    let previousApi: unknown
+    beforeEach(() => { previousApi = (window as any).electronAPI })
+    afterEach(() => { (window as any).electronAPI = previousApi })
+
+    it('waits for the download: keeps the list, counts no failure and does not say the scan failed', async () => {
+      ;(window as any).electronAPI = { jensen: { getState: vi.fn(async () => ({ connected: true, listBusy: true })) } }
+      const { service, s } = makeConnectedService(738)
+      const cached = [{ filename: 'old.hda' }]
+      s.cachedRecordings = cached
+      mockJensen.listFiles.mockResolvedValueOnce(null)
+      const messages: string[] = []
+      service.onStatusChange((status: { step: string; message: string }) => messages.push(`${status.step}: ${status.message}`))
+
+      expect(await service.listRecordings(undefined, true)).toBe(cached)
+      expect(messages.at(-1)).toBe('ready: Device ready')
+      expect(messages.some(message => message.includes('File scan failed'))).toBe(false)
+      expect(s.listRecordingsFailureCount).toBe(0)
+      const log = (s.activityLog as Array<{ message: string }>).map(entry => entry.message)
+      expect(log).toContain('File list waits for the download')
+    })
+
+    it('still reports a failed scan when nothing owns the device', async () => {
+      ;(window as any).electronAPI = { jensen: { getState: vi.fn(async () => ({ connected: true, listBusy: false })) } }
+      const { service, s } = makeConnectedService(2)
+      mockJensen.listFiles.mockResolvedValueOnce(null)
+      const messages: string[] = []
+      service.onStatusChange((status: { step: string; message: string }) => messages.push(`${status.step}: ${status.message}`))
+
+      await service.listRecordings(undefined, true)
+      expect(messages.at(-1)).toBe('error: File scan failed — will retry')
+      expect(s.listRecordingsFailureCount).toBe(0)
     })
   })
 })

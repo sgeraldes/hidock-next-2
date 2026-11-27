@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runDiarization } from './diarize.mjs'
+import { fingerprintBytes, fingerprintMatches } from './source-fingerprint.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 export const SEMANTIC_MODEL = 'local/nemotron-3-embed-1b'
@@ -16,7 +17,7 @@ export function validateSemanticRequest(request) {
   }
   return { purpose: request.purpose, texts: request.texts }
 }
-export function semanticFingerprint(pythonPath, modelDir, siteDir) {
+export function semanticFingerprint(pythonPath, modelDir, siteDir, form = 'lf') {
   const manifestPath = join(modelDir, 'hidock-semantic-manifest.json')
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   if (manifest.model !== SEMANTIC_MODEL || !/^nemotron-import-sha256:[a-f0-9]{64}$/.test(manifest.spaceId)) throw new Error('Invalid semantic manifest')
@@ -28,7 +29,7 @@ export function semanticFingerprint(pythonPath, modelDir, siteDir) {
   }
   const hash = createHash('sha256')
   for (const path of [pythonPath, manifestPath, join(here, 'semantic_embedding_worker.py'), join(here, 'prepare_semantic_embeddings.py'),
-    join(siteDir, 'onnxruntime', '__init__.py')]) hash.update(readFileSync(path))
+    join(siteDir, 'onnxruntime', '__init__.py')]) hash.update(fingerprintBytes(path, form))
   const capi = join(siteDir, 'onnxruntime', 'capi')
   const binaries = readdirSync(capi).filter(name => /\.(pyd|dll|so)$/i.test(name)).sort()
   if (!binaries.length) throw new Error('ONNX Runtime native CPU extension missing')
@@ -39,8 +40,8 @@ export function semanticFingerprint(pythonPath, modelDir, siteDir) {
   return hash.digest('hex')
 }
 export function readySemanticEmbeddings(proof, options) {
-  try { return Boolean(proof?.testedAt && proof.device === 'cpu' && proof.dimensions === 2048 &&
-    proof.fingerprint === semanticFingerprint(options.pythonPath, options.modelDir, options.siteDir)) } catch { return false }
+  return Boolean(proof?.testedAt && proof.device === 'cpu' && proof.dimensions === 2048 &&
+    fingerprintMatches(proof.fingerprint, form => semanticFingerprint(options.pythonPath, options.modelDir, options.siteDir, form)))
 }
 export async function runSemanticEmbeddings(raw, options) {
   const request = validateSemanticRequest(raw)

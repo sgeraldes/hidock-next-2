@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import ffmpegPath from 'ffmpeg-static'
-import type { TimingSegment } from '../../../src/shared/transcript-timing'
+import { SECTION_PAD_SECONDS, type TimingSegment } from '../../../src/shared/transcript-timing'
 
 /**
  * "Transcribe this section again": cut the stretch of audio where a range of
@@ -14,8 +14,7 @@ import type { TimingSegment } from '../../../src/shared/transcript-timing'
 
 /** Longer than this is not a section; it is a new transcription of the recording. */
 export const MAX_SECTION_SECONDS = 15 * 60
-/** Audio kept on each side, so the first and last words are not cut. */
-export const SECTION_PAD_SECONDS = 1
+export { SECTION_PAD_SECONDS }
 
 export interface SectionTranscript {
   fullText: string

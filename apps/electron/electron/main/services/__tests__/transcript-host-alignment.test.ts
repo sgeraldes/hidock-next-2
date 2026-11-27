@@ -4,7 +4,8 @@ import { existsSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { dirname } from 'path'
 import { fixTimesOnModelHost, memoryJobStore, type HostFixDeps } from '../transcript-host-alignment'
-import { ModelHostUnavailableError } from '../model-host-client'
+import { createHash } from 'crypto'
+import { ALIGN_MODEL, alignWordsOnModelHost, ModelHostUnavailableError, resetModelHostHealthCache } from '../model-host-client'
 
 const lines = [{ text: 'Hola, Manuel.' }, { text: '¿Cómo estás?' }]
 const window = { start: 100, end: 130 }
@@ -100,6 +101,42 @@ describe('fixTimesOnModelHost', () => {
     expect(await fixTimesOnModelHost({ recordingId: 'rec-1', audioPath: 'a.hda', lines, window, durationSeconds: 600 }, d))
       .toMatchObject({ used: false, reason: expect.stringMatching(/config unreadable/) })
   })
+
+  it('waits for a host busy with a queued recording and uses its words, not the fallback (27-nov-2026)', async () => {
+    // After a restart the host was transcribing a queued recording: it refused the section
+    // with 429 and Fix times fell back to this computer at once. Now it waits for the slot.
+    resetModelHostHealthCache()
+    const id = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+    const audioHash = createHash('sha256').update('wav').digest('hex')
+    const result = { model: ALIGN_MODEL, modelVersion: 'parakeet-int8', device: 'cpu', words: [
+      { word: 'hola', start: 5, end: 5.4 }, { word: 'manuel', start: 5.5, end: 5.9 },
+      { word: 'como', start: 8, end: 8.4 }, { word: 'estas', start: 8.5, end: 8.9 }] }
+    let refusals = 2
+    let accepted = false
+    const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname
+      if (path === '/health') return json({ protocolVersion: 1, state: 'busy', capabilities: ['vad'], alignmentModels: [ALIGN_MODEL] })
+      if (path === '/v1/capabilities') return json({ protocolVersion: 1, stages: ['alignment'], models: [ALIGN_MODEL] })
+      if (path === '/v1/jobs') return json({ id, status: 'awaiting-upload', audioHash })
+      if (path === `/v1/jobs/${id}/audio` && init?.method === 'PUT') {
+        if (refusals > 0) { refusals--; return json({ error: 'Worker is busy or paused' }, 429) }
+        accepted = true
+        return json({ id, status: 'completed', audioHash, result, resultHash: createHash('sha256').update(JSON.stringify(result)).digest('hex') }, 202)
+      }
+      if (path === `/v1/jobs/${id}`) return json({ id, status: accepted ? 'running' : 'awaiting-upload', audioHash })
+      return json({ error: 'unexpected' }, 404)
+    }) as unknown as typeof fetch
+    const d = deps({
+      settings: () => ({ url: 'http://127.0.0.1:8766', token: 'test' }),
+      align: (clip, settings, options) => alignWordsOnModelHost(clip, settings, options, fetchFn),
+      store: memoryJobStore
+    })
+    const outcome = await fixTimesOnModelHost({ recordingId: 'rec-1', audioPath: 'F:/audio/rec.hda', lines, window, durationSeconds: 600 }, d)
+    expect(outcome).toMatchObject({ used: true, modelVersion: 'parakeet-int8' })
+    if (outcome.used) expect(outcome.alignment.starts[0]).toBeCloseTo(104, 2)
+    expect(refusals).toBe(0)
+  }, 15_000)
 
   it('reports a failed section cut as a reason, not a crash', async () => {
     const d = deps({ extract: vi.fn(async () => { throw new Error('Section audio extraction exited 1') }) })

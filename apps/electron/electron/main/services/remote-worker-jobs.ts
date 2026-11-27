@@ -26,6 +26,8 @@ export interface RemoteJobStore {
 }
 type Job = { id: string; status: string; audioHash: string; result?: unknown; resultHash?: string; error?: string }
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
+/** How long to wait before offering the upload again to a host busy with another job. */
+const HOST_BUSY_RETRY_MS = 1000
 export type RemoteAudioChannelMap = Array<{ sourceChannel: 0 | 1; role: 'unknown' | 'microphone' | 'system'; evidence: 'unverified' | 'firmware-manifest' | 'user-confirmed' }>
 
 /** Shared key for normal jobs and verified imports of an already-created job. */
@@ -46,7 +48,13 @@ export async function runRemoteWorkerJob(input: {
   path: string; base: string; token: string; model: string; timeoutMs: number;
   stage?: 'diarization' | 'vad' | 'transcription' | 'alignment'; language?: string; recordingId?: string;
   channelMode?: 'separate'; channelMap?: RemoteAudioChannelMap; activeChannels?: Array<0 | 1>;
-  shouldContinue?: () => boolean; store: RemoteJobStore; fetchFn?: typeof fetch
+  shouldContinue?: () => boolean; store: RemoteJobStore; fetchFn?: typeof fetch;
+  /**
+   * The host runs one job at a time and refuses an upload with 429 while another runs,
+   * leaving this job awaiting-upload. With this set, the upload is tried again until the
+   * host takes it or the timeout passes; without it, the caller gets the refusal at once.
+   */
+  waitWhileHostBusy?: boolean
 }): Promise<unknown> {
   if (input.recordingId !== undefined && (typeof input.recordingId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.recordingId))) {
     throw new Error('Invalid recording identity')
@@ -154,10 +162,20 @@ export async function runRemoteWorkerJob(input: {
     throw new Error('Remote cancellation not confirmed; retained job identity for reconciliation; automatic retry disabled')
   }
   if (cancelled()) return cancel()
-  if (job.status === 'awaiting-upload') {
+  for (let attempt = 0; job.status === 'awaiting-upload'; attempt++) {
+    if (attempt > 0) {
+      // Only reached with waitWhileHostBusy, after the host said this job still has no input.
+      // The host refuses a second upload with 409 once it accepted one, so trying again is safe.
+      if (Date.now() + HOST_BUSY_RETRY_MS >= deadline) {
+        throw new Error('Remote worker timeout: the host stayed busy with another job; retained job identity for resume')
+      }
+      await new Promise(resolve => setTimeout(resolve, HOST_BUSY_RETRY_MS))
+      if (cancelled()) return cancel()
+    }
     const controller = new AbortController()
     const watch = setInterval(() => { if (cancelled() || Date.now() >= deadline) controller.abort() }, 250)
     const body = createReadStream(input.path)
+    let hostBusy = false
     try {
       // Node streams the file; no full recording Buffer is retained in Electron.
       job = await request(`/v1/jobs/${identity.id}/audio`, { method: 'PUT',
@@ -165,10 +183,13 @@ export async function runRemoteWorkerJob(input: {
         headers: { 'content-type': 'application/octet-stream' } } as RequestInit)
     } catch (error) {
       if (cancelled()) return cancel()
+      // Only the host's busy refusal is worth waiting for; any other refusal ends here as before.
+      hostBusy = /Remote worker HTTP 429[^0-9]/.test(error instanceof Error ? error.message : String(error))
       // The PUT may have committed even if its response was lost. Observe, never re-upload blindly.
       if (Date.now() >= deadline) throw new Error('Remote worker timeout; retained job identity for resume', { cause: error })
       job = await request(`/v1/jobs/${identity.id}`)
     } finally { clearInterval(watch); body.destroy() }
+    if (!input.waitWhileHostBusy || !hostBusy) break
   }
   for (;;) {
     if (cancelled()) return cancel()

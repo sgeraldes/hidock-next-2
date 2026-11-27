@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterAll, describe, it, expect, vi } from 'vitest'
-import { rmSync } from 'fs'
+import { existsSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -42,13 +42,16 @@ const KEEP_SYNC = process.env.HIDOCK_FIXTURE_SYNC === 'normal'
 const MEASURE_ONLY = process.env.HIDOCK_FIXTURE_MEASURE === '1'
 let attempt = 0
 
-/** Each attempt's database is about 250 MB: remove it and its WAL files. */
-function removeFixtureDatabase(path: string): void {
-  for (const file of [path, `${path}-wal`, `${path}-shm`]) rmSync(file, { force: true })
-}
-
-// The passes write the wiki and their cursors under the data folder (paths.root).
-afterAll(() => { rmSync(paths.root, { recursive: true, force: true }) })
+// Each run leaves a 250 MB database and a folder of wiki pages in the temp folder otherwise.
+afterAll(() => {
+  for (let n = 1; n <= attempt; n++) {
+    for (const suffix of ['', '-wal', '-shm']) {
+      const file = `${paths.root}-${n}.sqlite${suffix}`
+      if (existsSync(file)) rmSync(file, { force: true })
+    }
+  }
+  if (existsSync(paths.root)) rmSync(paths.root, { recursive: true, force: true })
+})
 
 describe('2,150 transcript background passes', () => {
   it('keeps each main-thread hold below 100 ms', { retry: 1, timeout: 300_000 }, async () => {
@@ -97,7 +100,16 @@ describe('2,150 transcript background passes', () => {
       const { recomputeAudioWarnings } = await import('../value-classification')
       holds.warnings = await hold('evaluation warnings', () => recomputeAudioWarnings())
       const { backfillMeetingWiki } = await import('../meeting-wiki')
+      // This UPDATE rewrites every 100 KB transcript row, about 240 MB into the WAL,
+      // as large as the seed. With synchronous OFF its checkpoint never syncs, so
+      // the OS was still writing those pages back while the wiki pass read them:
+      // the only pass measured right after a bulk write, and the only one that
+      // stalled on CI (252, 301 and 556 ms holds; 25 to 33 ms otherwise, 27-nov).
+      // Finish it the way the seed is finished, outside the measurement.
+      run('PRAGMA synchronous = NORMAL')
       run("UPDATE transcripts SET validity_status='valid', integrity_status='ok'")
+      queryOne('PRAGMA wal_checkpoint(TRUNCATE)')
+      run('PRAGMA synchronous = OFF')
       holds.wiki = await hold('wiki backfill', () => backfillMeetingWiki({ budgetMs: 500, batchSize: 10 }))
       runInTransaction(() => {
         for (let i = 0; i < 2150; i++) run('INSERT INTO meetings (id, subject, start_time, end_time) VALUES (?, ?, ?, ?)', [`m-${i}`, `Project ${i}`, '2026-10-04T12:00:00Z', '2026-10-04T13:00:00Z'])
@@ -117,9 +129,6 @@ describe('2,150 transcript background passes', () => {
       expect(holds).toEqual(expect.objectContaining({ captures: expect.any(Number), rag: expect.any(Number) }))
       process.stdout.write(`BACKGROUND FIXTURE worst: ${Math.max(...Object.values(holds)).toFixed(1)}ms ${JSON.stringify(holds)}\n`)
       if (!MEASURE_ONLY) for (const [name, duration] of Object.entries(holds)) expect(duration, name).toBeLessThan(100 * SCALE)
-    } finally {
-      closeDatabase()
-      removeFixtureDatabase(paths.db)
-    }
+    } finally { closeDatabase() }
   })
 })
