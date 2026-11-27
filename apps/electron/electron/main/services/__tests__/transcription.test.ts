@@ -623,9 +623,29 @@ describe('Transcription Service', () => {
       }
     })
 
+    it('lets a row that named its engine fail as before, so it does not hold the queue (Kiro review)', { timeout: 20000 }, async () => {
+      Object.assign(mockConfig.transcription, { engineFallbackEnabled: true, engineRetries: { transient: 0, quota: 0, unknown: 0 }, modelHostUrl: '' })
+      const rows = [{ id: 'queue-r1', recording_id: 'rec-123', filename: 'test.wav', status: 'pending', attempts: 0, retry_count: 0, provider: 'remote-worker' }]
+      mockGetQueueItems.mockImplementation((status?: string) => (status === 'pending' ? rows.filter((r) => r.status === 'pending') : []))
+      mockUpdateQueueItem.mockImplementation((id: string, status: string) => { const row = rows.find((r) => r.id === id); if (row) row.status = status })
+      mockGetRecordingById.mockImplementation((id: string) => ({ id, filename: `${id}.wav`, file_path: `/recordings/${id}.wav`, status: 'complete' }))
+      const { processQueueManually, getQueueState, resetEngineWait } = await import('../transcription')
+      try {
+        await processQueueManually()
+        expect(mockHoldQueueItemForEngine).not.toHaveBeenCalled()
+        expect(mockUpdateQueueItem.mock.calls.some((call: any[]) => call[0] === 'queue-r1' && call[1] === 'failed')).toBe(true)
+        expect(getQueueState().pauseReason).not.toBe('no_engine_available')
+      } finally {
+        mockGetQueueItems.mockReset().mockReturnValue([])
+        mockUpdateQueueItem.mockReset()
+        mockGetRecordingById.mockReset()
+        resetEngineWait()
+      }
+    })
+
     it('puts a row that failed only for lack of an engine back to waiting, retries untouched', { timeout: 20000 }, async () => {
       const failed = { id: 'queue-old', recording_id: 'rec-123', filename: 'test.wav', status: 'failed', attempts: 1, retry_count: 0,
-        completed_at: '2026-11-27 15:48:58', error_message: 'No transcription engine succeeded: configured:gemini #1 failed (credentials); ' +
+        completed_at: new Date(Date.now() - 3600_000).toISOString().replace('T', ' ').slice(0, 19), error_message: 'No transcription engine succeeded: configured:gemini #1 failed (credentials); ' +
           'remote:moondream/parakeet-ultra #1 failed (unavailable); remote:Qwen/Qwen3-ASR-1.7B #1 failed (unavailable). ' +
           'Last error: The worker has not advertised the selected ASR engine; automatic retry disabled' }
       mockGetQueueItems.mockImplementation((status?: string) => (status === 'failed' ? [failed] : []))

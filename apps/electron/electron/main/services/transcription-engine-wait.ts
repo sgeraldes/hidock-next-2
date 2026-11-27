@@ -36,13 +36,21 @@ export function noEngineCouldTakeJob(attempts: ReadonlyArray<Pick<EngineAttempt,
     attempt.outcome !== 'succeeded' && attempt.errorClass !== undefined && NO_ENGINE_CLASSES.has(attempt.errorClass))
 }
 
+/** Only rows that failed this recently go back to waiting; older ones stay as the owner left them. */
+export const REQUEUE_FAILED_WITHIN_MS = 24 * 60 * 60_000
+
 /**
  * The same question for a row already stored as failed, read from its message
  * ("No transcription engine succeeded: configured:gemini #1 failed (credentials); ...").
- * Lets the queue put rows that failed this way before the rule existed back to waiting.
+ * Lets the queue put rows that failed this way in the last day back to waiting.
+ * `completedAt` is SQLite's UTC "YYYY-MM-DD HH:MM:SS" (or ISO).
  */
-export function failedOnlyForLackOfEngine(message: string | null | undefined): boolean {
+export function failedOnlyForLackOfEngine(message: string | null | undefined, completedAt?: string | null, now: number = Date.now()): boolean {
   if (!message?.startsWith(EXHAUSTED_PREFIX)) return false
+  if (completedAt !== undefined) {
+    const at = completedAt ? Date.parse(completedAt.includes('T') ? completedAt : `${completedAt.replace(' ', 'T')}Z`) : NaN
+    if (!Number.isFinite(at) || now - at > REQUEUE_FAILED_WITHIN_MS) return false
+  }
   const summary = message.slice(EXHAUSTED_PREFIX.length).split('. Last error:')[0]
   const attempts = summary.split('; ').map((part) => /\s#\d+ (succeeded|failed|skipped-unavailable)(?: \(([a-z]+)\))?$/.exec(part.trim()))
   if (attempts.some((match) => !match)) return false

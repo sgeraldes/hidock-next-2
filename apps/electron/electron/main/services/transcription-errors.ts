@@ -56,7 +56,7 @@ export interface ClassifiedError {
 }
 
 const PAYMENT_REFUSAL = new RegExp([
-  '\b402\b',
+  '\\b402\\b',
   'prepayment credits are depleted',
   'insufficient (?:prepaid )?credits',
   'credit balance (?:is )?(?:depleted|exhausted)',

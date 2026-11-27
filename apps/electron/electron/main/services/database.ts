@@ -8882,7 +8882,9 @@ export function updateQueueItem(id: string, status: string, errorMessage?: strin
  * on the row for Operations, and retry_count does not move (a wait is not a retry).
  */
 export function holdQueueItemForEngine(id: string, reason: string): void {
-  run(`UPDATE transcription_queue SET status = 'pending', progress = 0, completed_at = NULL, error_message = ? WHERE id = ?`, [reason, id])
+  // The pass that found no engine counted itself as an attempt when it started; a wait is not one.
+  run(`UPDATE transcription_queue SET status = 'pending', progress = 0, completed_at = NULL, error_message = ?,
+       attempts = MAX(attempts - CASE WHEN status = 'processing' THEN 1 ELSE 0 END, 0) WHERE id = ?`, [reason, id])
 }
 
 export function updateQueueProgress(id: string, progress: number): void {

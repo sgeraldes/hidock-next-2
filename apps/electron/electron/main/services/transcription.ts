@@ -516,8 +516,8 @@ export function getQueueState(): TranscriptionQueueState {
   const owned = getOwnedPipelineRecordings()
   return {
     pauseReason: (getConfig().transcription.provider || 'gemini') === 'gemini' && !resolveGeminiApiKey() ? 'no_gemini_key'
-      : engineWait ? 'no_engine_available' : null,
-    pauseDetail: engineWait?.reason ?? null,
+      : engineWait && getQueueItems('pending').length > 0 ? 'no_engine_available' : null,
+    pauseDetail: engineWait && getQueueItems('pending').length > 0 ? engineWait.reason : null,
     paused: queuePaused,
     isProcessing: owned.length > 0,
     processingId: owned.includes(currentProcessingId || '') ? currentProcessingId : owned[0] ?? null,
@@ -823,7 +823,9 @@ async function runQueueItem(
     }
     // No engine could take it (refused key, model not prepared, host away): the
     // recording waits for one. It is not failed and keeps its retries (27-nov-2026).
-    if (error instanceof EngineChainExhaustedError && noEngineCouldTakeJob(error.attempts)) {
+    // A row that named its engine fails as before: the person who picked it sees why,
+    // and it never holds the default chain's recordings behind it (Kiro review).
+    if (!item.provider && error instanceof EngineChainExhaustedError && noEngineCouldTakeJob(error.attempts)) {
       const reason = engineWaitReason(error.attempts)
       holdQueueItemForEngine(item.id, reason)
       updateRecordingTranscriptionStatus(item.recording_id, 'pending')
@@ -1177,7 +1179,7 @@ async function processQueue(): Promise<void> {
     for (const item of failedItems) {
       // Failed only because no engine could take it, before that waited (27-nov-2026):
       // back to waiting, retries untouched.
-      if (failedOnlyForLackOfEngine(item.error_message)) {
+      if (!item.provider && failedOnlyForLackOfEngine(item.error_message, item.completed_at ?? null)) {
         holdQueueItemForEngine(item.id, 'Waiting for a transcription engine')
         updateRecordingTranscriptionStatus(item.recording_id, 'pending')
         console.log(`[Transcription] ${item.id} failed only for lack of an engine; waiting for one`)

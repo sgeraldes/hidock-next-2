@@ -49,6 +49,13 @@ describe('failedOnlyForLackOfEngine', () => {
       'remote:moondream/parakeet-ultra #0 skipped-unavailable (unavailable). Last error: No Model Host is paired')).toBe(true)
   })
 
+  it('leaves a row alone when it failed more than a day ago', () => {
+    const now = Date.parse('2026-11-28T12:00:00Z')
+    expect(failedOnlyForLackOfEngine(LIVE_FAILURE, '2026-11-27 15:48:58', now)).toBe(true)
+    expect(failedOnlyForLackOfEngine(LIVE_FAILURE, '2026-11-26 15:48:58', now)).toBe(false)
+    expect(failedOnlyForLackOfEngine(LIVE_FAILURE, null, now)).toBe(false)
+  })
+
   it('leaves a row alone when one engine failed for another reason', () => {
     expect(failedOnlyForLackOfEngine('No transcription engine succeeded: configured:gemini #1 failed (quota); ' +
       'remote:moondream/parakeet-ultra #0 skipped-unavailable (unavailable)')).toBe(false)
@@ -93,6 +100,11 @@ describe('CredentialRefusals', () => {
 })
 
 describe('a prepaid-credit refusal', () => {
+  it('is a credentials problem even as a bare 402 with RESOURCE_EXHAUSTED (Kiro review)', () => {
+    expect(classifyTranscriptionError(new Error('[402 Payment Required] RESOURCE_EXHAUSTED')).class).toBe('credentials')
+    expect(classifyTranscriptionError(new Error('HTTP 4020 RESOURCE_EXHAUSTED')).class).toBe('quota')
+  })
+
   it('is a credentials problem, not a rate limit to wait out', () => {
     const live = '{"error":{"code":402,"message":"Your prepayment credits are depleted. Please go to AI Studio","status":"RESOURCE_EXHAUSTED"}}'
     expect(classifyTranscriptionError(new Error(live)).class).toBe('credentials')

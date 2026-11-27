@@ -41,9 +41,8 @@ export interface AvailabilityDeps {
 
 /**
  * Null when the engine can be tried now, otherwise a sentence for the attempt
- * log. A host that is busy is still tried (its queue takes the job); a model
- * the host has not prepared is caught by the route's capability check and
- * moves the chain on the same way.
+ * log. A host that answers busy is still tried (its queue takes the job). A
+ * model missing from the host's asrModels is skipped here, before any upload.
  */
 export async function engineUnavailableReason(step: EngineStep, deps: AvailabilityDeps): Promise<string | null> {
   // The configured engine keeps its own checks (and its own local fallback setting).
