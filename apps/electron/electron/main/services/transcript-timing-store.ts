@@ -9,6 +9,7 @@ import {
   assessTimingEvidence, fixedRanges, NO_EVIDENCE, sectionRuns, type SpeechEvidence
 } from './transcript-timing-evidence'
 import { speechSpansFromFrames, type SpeechSpan } from './transcript-time-aligner'
+import { checkModelHost, modelHostCanAlign } from './model-host-client'
 import type { TimingAssessment, TimingFinding, TimingSegment } from '../../../src/shared/transcript-timing'
 
 interface TimingRow {
@@ -193,7 +194,6 @@ async function hostCanAlign(): Promise<boolean> {
     const { getConfig } = await import('./config')
     const config = getConfig().transcription
     if (!config.modelHostUrl?.trim() || !config.modelHostToken) return false
-    const { checkModelHost, modelHostCanAlign } = await import('./model-host-client')
     return modelHostCanAlign(await checkModelHost({ url: config.modelHostUrl, token: config.modelHostToken }))
   } catch (err) {
     console.warn('[TranscriptTiming] Could not ask the model host whether it can place words:', err instanceof Error ? err.message : err)

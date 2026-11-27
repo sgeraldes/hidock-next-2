@@ -36,11 +36,8 @@ vi.mock('usb', () => {
 // Import after mocking
 // ---------------------------------------------------------------------------
 
-import {
-  JensenDevice,
-  USB_PRODUCT_IDS,
-  CMD,
-} from '../jensen'
+import { JensenDevice } from '../jensen'
+import { USB_PRODUCT_IDS, CMD } from '@hidock/jensen-protocol'
 
 // ---------------------------------------------------------------------------
 // Helpers

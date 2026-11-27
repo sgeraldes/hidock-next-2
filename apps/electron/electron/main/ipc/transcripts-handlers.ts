@@ -28,7 +28,7 @@ import { getVectorStore } from '../services/vector-store'
 import { exportMeetingWiki } from '../services/meeting-wiki'
 import { syncTrustVerdicts } from '../services/transcript-trust'
 import { getDiarizedSegments } from '../services/diarization-store'
-import { retrySummary } from '../services/transcription'
+import { retrySummary, transcribeRecordingSection } from '../services/transcription'
 import { success, error, Result } from '../types/api'
 import { getTranscriptTiming, loadTimingState } from '../services/transcript-timing-store'
 import { applyTimingReview, spliceSection, type TimingReviewRequest } from '../services/transcript-timing-evidence'
@@ -394,7 +394,6 @@ export function registerTranscriptsHandlers(): void {
       if (finding.windowStart === null || finding.windowEnd === null) return error('VALIDATION_ERROR', 'Where this section belongs is unknown')
       // Lines a second or two off are speech overlapping; a paid transcription cannot improve them.
       if ((finding.fix?.displacement ?? 0) < OVERLAP_SECONDS) return error('VALIDATION_ERROR', 'These lines are where they belong, give or take two people talking at once')
-      const { transcribeRecordingSection } = await import('../services/transcription')
       const section = await transcribeRecordingSection(recordingId, finding.windowStart, finding.windowEnd, state.durationSeconds)
       // The new lines go in after the hidden old ones: every later turn moves by their count.
       const counts = renderedTurnCounts(state.segments)

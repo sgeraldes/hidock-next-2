@@ -14,6 +14,7 @@ import { modelHostFetch } from './model-host-transport'
 import { readFile } from 'fs/promises'
 import { basename, extname } from 'path'
 import type { AcousticWorkerResult } from './speaker-linking'
+import { runRemoteWorkerJob, type RemoteJobStore } from './remote-worker-jobs'
 import type { JevQuestion, JevResponse, JevStructured } from './jev-client'
 import type {
   ModelHostDiagnostics,
@@ -377,7 +378,6 @@ export async function diarizeOnModelHost(
   if (!health) throw new ModelHostUnavailableError('The model host did not answer.')
   if (health.protocolVersion === 1) {
     if (!options.recordingId) throw new Error('Remote worker requires a recording identity for durable resume')
-    const { runRemoteWorkerJob } = await import('./remote-worker-jobs')
     const { remoteJobCheckpoints } = await import('./remote-job-checkpoints')
     return await runRemoteWorkerJob({ recordingId: options.recordingId, path: audioPath, base, token: settings.token,
       model: options.model || 'pyannote/speaker-diarization-3.1', timeoutMs: options.timeoutMs,
@@ -490,7 +490,7 @@ export interface HostAlignmentAnswer {
 export async function alignWordsOnModelHost(
   clipPath: string,
   settings: ModelHostSettings,
-  options: { timeoutMs: number; recordingId: string; shouldContinue?: () => boolean; store: import('./remote-worker-jobs').RemoteJobStore },
+  options: { timeoutMs: number; recordingId: string; shouldContinue?: () => boolean; store: RemoteJobStore },
   fetchFn: typeof fetch = fetch
 ): Promise<HostAlignmentAnswer> {
   let base: string
@@ -502,7 +502,6 @@ export async function alignWordsOnModelHost(
   if (!modelHostCanAlign(health)) {
     throw new ModelHostUnavailableError('The model host cannot place words yet: it needs version 0.6.0 and Parakeet prepared.')
   }
-  const { runRemoteWorkerJob } = await import('./remote-worker-jobs')
   // The job id, as the durable client saves it, so a job that ran out of time can be stopped.
   let jobId: string | undefined
   const store: typeof options.store = {
@@ -513,7 +512,8 @@ export async function alignWordsOnModelHost(
   try {
     const result = await runRemoteWorkerJob({ path: clipPath, base, token: settings.token, model: ALIGN_MODEL, stage: 'alignment',
       timeoutMs: options.timeoutMs, recordingId: options.recordingId, shouldContinue: options.shouldContinue,
-      store, fetchFn }) as { words: HostAlignmentAnswer['words']; modelVersion: string }
+      // A host busy with a queued recording takes the section once its slot frees, within the timeout.
+      store, fetchFn, waitWhileHostBusy: true }) as { words: HostAlignmentAnswer['words']; modelVersion: string }
     return { words: result.words, modelVersion: result.modelVersion }
   } catch (error) {
     invalidateModelHostHealthCache()

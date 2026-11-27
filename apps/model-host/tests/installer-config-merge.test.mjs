@@ -16,7 +16,7 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { spawnSync } from 'child_process'
 import { loadConfig } from '../src/config.mjs'
-import { asrRuntimeFingerprint, readyAsrModels } from '../src/asr-readiness.mjs'
+import { asrRuntimeFingerprint, hostAsrFingerprint, readyAsrModels } from '../src/asr-readiness.mjs'
 import { NATIVE_DIARIZATION_MODEL, nativeDiarizationFingerprint, readyNativeDiarization } from '../src/native-diarization.mjs'
 import { SEMANTIC_MODEL, readySemanticEmbeddings, semanticFingerprint } from '../src/semantic-embeddings.mjs'
 import { realtimeFingerprint, readyRealtime } from '../src/realtime-readiness.mjs'
@@ -133,7 +133,7 @@ function validatedState(host) {
 /** Ask the service's own gates, the way main.mjs does. */
 function gates(config, host) {
   return {
-    asr: readyAsrModels(config, config.pythonPath, (python, model) => asrRuntimeFingerprint(python, model, host.root)),
+    asr: readyAsrModels(config, config.pythonPath, hostAsrFingerprint(host.root)),
     diarization: readyNativeDiarization(config, config.pythonPath, host.root),
     semantic: readySemanticEmbeddings(config.semanticEmbeddingValidation,
       { pythonPath: config.pythonPath, modelDir: host.modelDir, siteDir: host.siteDir }),

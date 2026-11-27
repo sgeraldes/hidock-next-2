@@ -717,6 +717,16 @@ class HiDockDeviceService {
   }
 
   // Get cached recordings list (available even when disconnected)
+  /** Whether a download or another operation owns the device, so the main process stood the list down. */
+  private async listingWaitsForTransfer(): Promise<boolean> {
+    try {
+      const state = await window.electronAPI?.jensen?.getState?.()
+      return state?.listBusy === true
+    } catch {
+      return false
+    }
+  }
+
   getCachedRecordings(): HiDockRecording[] {
     return this.cachedRecordings || []
   }
@@ -1248,6 +1258,7 @@ class HiDockDeviceService {
       // C2/HIGH-2: only a fully successful scan may drive the terminal status to
       // 'ready' in the finally block. Every early return below is a failure path.
       let scanSucceeded = false
+      let scanDeferred = false
       try {
         const files = await this.jensen.listFiles((filesFound, expectedFiles) => {
           if (filesFound > animationProgress) {
@@ -1267,6 +1278,13 @@ class HiDockDeviceService {
         // Do NOT poison the cache or report an empty device — return whatever we
         // already have so the UI keeps its existing list.
         if (!files) {
+          // A download owns the USB stream and the main process stood the list down
+          // (27-nov-2026: "File scan failed" every minute while 104 recordings downloaded).
+          if (await this.listingWaitsForTransfer()) {
+            scanDeferred = true
+            this.logActivity('info', 'File list waits for the download', 'The list runs again after the download; recordings stay as they are.')
+            return this.cachedRecordings ?? []
+          }
           this.logActivity('error', 'Device returned no file data', 'Received null response from listFiles — device may have disconnected')
           return this.cachedRecordings ?? []
         }
@@ -1341,7 +1359,7 @@ class HiDockDeviceService {
         // even on failure; a failed/interrupted scan surfaces an honest state
         // instead (so downloads don't start against an unhealthy device).
         if (this.connectionStatus.step === 'counting-files') {
-          if (scanSucceeded && this.isConnected()) {
+          if ((scanSucceeded || scanDeferred) && this.isConnected()) {
             this.updateStatus('ready', 'Device ready', 100)
           } else if (this.isConnected()) {
             this.updateStatus('error', 'File scan failed — will retry')
