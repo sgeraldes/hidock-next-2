@@ -31,6 +31,26 @@ export interface TimingSegment {
  */
 export const OVERLAP_SECONDS = 2
 
+/** Audio kept on each side of a section, so the first and last words are not cut. */
+export const SECTION_PAD_SECONDS = 1
+
+/**
+ * Parakeet picks the language from what it hears. On a few seconds of quiet
+ * Spanish it heard English or nothing (Rec28, 27-nov-2026: a 14 s clip gave
+ * "Oh yes.", a 3.2 s one no words); with 30 s or more around the same lines it
+ * heard every word. The words outside the window cost the matcher little.
+ */
+export const HOST_ALIGN_MIN_SECONDS = 30
+
+/**
+ * How much audio Fix times with Parakeet sends for a window: the window with its
+ * padding, at least HOST_ALIGN_MIN_SECONDS. The main process also keeps the clip
+ * inside the recording, so a recording shorter than that sends all of itself.
+ */
+export function hostAlignmentSeconds(windowStart: number, windowEnd: number): number {
+  return Math.max(HOST_ALIGN_MIN_SECONDS, windowEnd - windowStart + 2 * SECTION_PAD_SECONDS)
+}
+
 /**
  * How Fix times placed the lines: on the words Parakeet heard on the model host,
  * or on this computer from the VAD's speech stretches, the stored loudness

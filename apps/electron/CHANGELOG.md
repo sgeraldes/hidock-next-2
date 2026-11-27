@@ -11,6 +11,9 @@ Device reference: [model/version gates, recordings and native markers](../../doc
 - The chain skips a Model Host model the host has not prepared, instead of uploading to it and failing.
 - Fix times with Parakeet sends at least 30 seconds of audio around the lines. On a few seconds of quiet speech Parakeet heard the wrong language or nothing, and Fix times fell back to the speech stretches on this computer.
 - The waveform of a long recording no longer fails with "FFmpeg diagnostics exceeded 64 KiB": warnings FFmpeg writes while decoding are drained.
+- Updating the Model Host no longer drops the models it had prepared. 0.6.0 and 0.6.1 shipped their scripts with Windows line endings, and every prepared model looked changed: Assistant chat failed with "Remote semantic model is not ready", and Parakeet Ultra and Qwen 1.7B had to be prepared again. The host now compares its scripts without line endings, and the text-generation model by their content instead of their file time.
+- Fix times with Parakeet waits while the host transcribes another recording, up to its two-minute limit, instead of falling back at once with "Remote worker awaiting-upload". The note under the button says how much audio is sent: at least 30 seconds.
+- A Gemini key that answered 402 is remembered across restarts for the same hour, by a fingerprint of the key, never the key. A restart no longer makes one refused call.
 
 ## 2026-11-26 | What plays or records, in the header; Fix times hears the words, on the Gamestation
 

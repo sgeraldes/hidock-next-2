@@ -9,10 +9,12 @@
  * the cause is gone. Waiting needs nothing: the queue tries again once an
  * engine can run, and Operations says why it waits.
  *
- * Pure: the queue in transcription.ts asks these questions and keeps the state.
+ * Pure apart from the refused-key file: the queue in transcription.ts asks these
+ * questions and keeps the state.
  */
 
 import { createHash } from 'crypto'
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import type { EngineAttempt } from './transcription-engine-chain'
 import type { TranscriptionErrorClass } from './transcription-errors'
 
@@ -77,31 +79,109 @@ export function credentialFingerprint(secret: string | null | undefined): string
   return secret ? createHash('sha256').update(secret).digest('hex').slice(0, 16) : null
 }
 
+type Refusal = { fingerprint: string | null; at: number; message: string }
+
+/** Where the refused keys outlive a restart. Both calls may throw; CredentialRefusals catches them. */
+export interface RefusalStore {
+  read(): string | null
+  write(text: string): void
+}
+
+/**
+ * A small JSON file, written through a temporary file and a rename, as the
+ * directed-request store does. A missing file reads as nothing stored.
+ */
+export function fileRefusalStore(path: () => string): RefusalStore {
+  return {
+    read: () => {
+      try { return readFileSync(path(), 'utf8') }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
+    },
+    write: (text) => {
+      const target = path()
+      const temporary = `${target}.${process.pid}.tmp`
+      try {
+        writeFileSync(temporary, text, 'utf8')
+        renameSync(temporary, target)
+      } catch (error) {
+        // A failed write or rename leaves no temporary file behind.
+        try { rmSync(temporary, { force: true }) } catch { /* the original error says what went wrong */ }
+        throw error
+      }
+    }
+  }
+}
+
+/** A provider message may quote the request URL with its key; the stored copy never does. */
+function withoutKeys(message: string): string {
+  return message
+    .replace(/([?&](?:key|api_key|apikey)=)[^&\s"')]+/gi, '$1[redacted]')
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[redacted]')
+    .replace(/\s+/g, ' ').trim().slice(0, 300)
+}
+
+function parseRefusals(text: string | null): Map<string, Refusal> {
+  const refused = new Map<string, Refusal>()
+  if (!text) return refused
+  const data = JSON.parse(text) as { version?: unknown; refusals?: unknown }
+  if (data?.version !== 1 || !data.refusals || typeof data.refusals !== 'object') return refused
+  for (const [engine, entry] of Object.entries(data.refusals as Record<string, Partial<Refusal>>)) {
+    if (!entry || (entry.fingerprint !== null && typeof entry.fingerprint !== 'string') ||
+        !Number.isFinite(entry.at) || typeof entry.message !== 'string') continue
+    refused.set(engine, { fingerprint: entry.fingerprint, at: entry.at as number, message: entry.message })
+  }
+  return refused
+}
+
 /**
  * Engines whose key was refused, so the chain skips them instead of calling the
- * provider again with the same key. Kept in memory: a restart tries once more.
+ * provider again with the same key. With a store, a restart within the hour
+ * skips the key too. Only the key's fingerprint is kept, never the key. A store
+ * that cannot be read or written leaves the memory working on its own.
  */
 export class CredentialRefusals {
-  private readonly refused = new Map<string, { fingerprint: string | null; at: number; message: string }>()
+  private refused: Map<string, Refusal> | null = null
 
-  constructor(private readonly ttlMs: number = CREDENTIAL_REFUSAL_TTL_MS) {}
+  constructor(private readonly ttlMs: number = CREDENTIAL_REFUSAL_TTL_MS, private readonly store?: RefusalStore) {}
+
+  private entries(): Map<string, Refusal> {
+    if (this.refused) return this.refused
+    try { this.refused = parseRefusals(this.store?.read() ?? null) }
+    catch (error) {
+      console.warn('[Transcription] Could not read the refused keys; starting without them:', error instanceof Error ? error.message : error)
+      this.refused = new Map()
+    }
+    return this.refused
+  }
+
+  private persist(): void {
+    if (!this.store) return
+    try {
+      this.store.write(JSON.stringify({ version: 1, refusals: Object.fromEntries(this.entries()) }))
+    } catch (error) {
+      console.warn('[Transcription] Could not store the refused keys:', error instanceof Error ? error.message : error)
+    }
+  }
 
   record(engine: string, fingerprint: string | null, message: string, now: number = Date.now()): void {
-    this.refused.set(engine, { fingerprint, at: now, message })
+    this.entries().set(engine, { fingerprint, at: now, message: withoutKeys(message) })
+    this.persist()
   }
 
   /** Why the engine is skipped, or null when it may be tried. */
   reason(engine: string, fingerprint: string | null, now: number = Date.now()): string | null {
-    const entry = this.refused.get(engine)
+    const entry = this.entries().get(engine)
     if (!entry) return null
     if (entry.fingerprint !== fingerprint || now - entry.at >= this.ttlMs) {
-      this.refused.delete(engine)
+      this.entries().delete(engine)
+      this.persist()
       return null
     }
     return `The provider refused this key (${entry.message.replace(/\s+/g, ' ').trim().slice(0, 120)}); waiting for a new key or for credit`
   }
 
   clear(): void {
-    this.refused.clear()
+    this.entries().clear()
+    this.persist()
   }
 }
