@@ -251,6 +251,7 @@ this build:
 ```bash
 npm --prefix apps/model-host run build:tray
 npm --prefix apps/model-host test
+python -m unittest discover -s apps/model-host/tests
 ```
 
 `build:tray` compiles the icon with `-Werror` and runs `tray/decide_test.c`
@@ -262,7 +263,10 @@ after the quiet period and leaves nothing behind; `tests/installer.test.mjs`
 checks the installer payload; `tests/decide-worker.test.mjs` runs the real
 `decide_worker.py` against a stand-in for the model's code, and
 `tests/decide.test.mjs` drives downloads, loading, idling and timeouts with a
-fake worker. CI runs all of them on every pull request.
+fake worker. The Python workers have their own unittest tests in
+`tests/test_*.py` (standard library only; tests that need a model or ffmpeg skip
+themselves), including one that starts `align_worker.py` with `python -P` from
+another folder, the way the host does. CI runs all of them on every pull request.
 
 ## SPEC-013 upgrade and optional ASR
 
