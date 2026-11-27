@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest'
+import { rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -34,7 +35,17 @@ async function hold(name: string, work: () => unknown | Promise<unknown>): Promi
 // limits (origin/main: 284 to 464 ms on the dev PC, five times that on CI); a
 // single stall (here or there) gets one retry, on a fresh database.
 const SCALE = process.env.CI ? 5 : 1
+// HIDOCK_FIXTURE_SYNC=normal keeps synchronous NORMAL, as the app opens the
+// library: checkpoints then sync, and the hold is what the owner's disk costs.
+const KEEP_SYNC = process.env.HIDOCK_FIXTURE_SYNC === 'normal'
+// HIDOCK_FIXTURE_MEASURE=1 records every hold without the suite's 100 ms limit.
+const MEASURE_ONLY = process.env.HIDOCK_FIXTURE_MEASURE === '1'
 let attempt = 0
+
+/** Each attempt's database is about 250 MB: remove it and its WAL files. */
+function removeFixtureDatabase(path: string): void {
+  for (const file of [path, `${path}-wal`, `${path}-shm`]) rmSync(file, { force: true })
+}
 
 describe('2,150 transcript background passes', () => {
   it('keeps each main-thread hold below 100 ms', { retry: 1, timeout: 300_000 }, async () => {
@@ -58,7 +69,7 @@ describe('2,150 transcript background passes', () => {
     // These fixtures measure how the code yields. A WAL checkpoint's fsync costs
     // what the test machine's disk costs (up to 720 ms seen on the dev PC), so the
     // fixture leaves durability to the OS for this temporary file.
-    run('PRAGMA synchronous = OFF')
+    if (!KEEP_SYNC) run('PRAGMA synchronous = OFF')
     const holds: Record<string, number> = {}
     try {
       const { backfillKnowledgeCapturesYielding } = await import('../knowledge-capture-backfill')
@@ -101,7 +112,11 @@ describe('2,150 transcript background passes', () => {
       const { getVectorStore } = await import('../vector-store')
       holds.rag = await hold('RAG excluded backfill', () => getVectorStore().backfillMissingTranscripts())
       expect(holds).toEqual(expect.objectContaining({ captures: expect.any(Number), rag: expect.any(Number) }))
-      for (const [name, duration] of Object.entries(holds)) expect(duration, name).toBeLessThan(100 * SCALE)
-    } finally { closeDatabase() }
+      process.stdout.write(`BACKGROUND FIXTURE worst: ${Math.max(...Object.values(holds)).toFixed(1)}ms ${JSON.stringify(holds)}\n`)
+      if (!MEASURE_ONLY) for (const [name, duration] of Object.entries(holds)) expect(duration, name).toBeLessThan(100 * SCALE)
+    } finally {
+      closeDatabase()
+      removeFixtureDatabase(paths.db)
+    }
   })
 })
