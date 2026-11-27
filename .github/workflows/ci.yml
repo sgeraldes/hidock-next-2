@@ -97,6 +97,18 @@ jobs:
         run: |
           python -m pip install 'cryptography>=42,<51'
           npm ci && npm run build:tray && npm test
+      - name: Model Host Python worker tests
+        # The workers run on the host as scripts, not as part of the vitest
+        # suite, and nothing ran their tests here: align_worker's import bug
+        # shipped in host 0.6.0 that way (fixed in 0.6.1). Standard library
+        # only, so no pip install; the tests that need a GPU or a model skip
+        # themselves. The standalone-launch test in test_align_worker.py runs
+        # the worker with `python -P` from another folder, as the host does.
+        # FFMPEG_PATH points the parakeet ffmpeg test at the bundled binary.
+        working-directory: apps/model-host
+        env:
+          FFMPEG_PATH: ${{ github.workspace }}/apps/electron/node_modules/ffmpeg-static/ffmpeg.exe
+        run: python -m unittest discover -s tests -v
       - name: Packaging preflight
         working-directory: apps/electron
         # The packaging scripts run this too, but CI never packages on a pull
