@@ -197,3 +197,60 @@ it('rejects invalid recording attribution before input or network access', async
     model: 'voice', timeoutMs: 1000, recordingId: '../private/name',
     store: { load: () => undefined, save: () => {} } })).rejects.toThrow('Invalid recording identity')
 })
+
+/** A host whose one slot refuses `busy` uploads with 429 before it takes this job. */
+function busyHost(stage: 'transcription' | 'diarization', busy: number, audioHash: string) {
+  const id = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+  const result = { model: 'voice', modelVersion: '1', device: 'cuda', ...(stage === 'transcription' ? { text: 'hola', segments: [], language: 'es' } : { speakers: [], segments: [] }) }
+  const resultHash = createHash('sha256').update(JSON.stringify(result)).digest('hex')
+  let status = 'awaiting-upload'
+  const seen: string[] = []
+  const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(url)).pathname
+    seen.push(`${init?.method || 'GET'} ${path}`)
+    if (path === '/v1/capabilities') return Response.json({ protocolVersion: 1, stages: [stage], models: ['voice'] })
+    if (path === '/v1/jobs') return Response.json({ id, status, audioHash })
+    if (path.endsWith('/audio')) {
+      if (busy > 0) { busy--; return Response.json({ error: 'Worker is busy or paused' }, { status: 429 }) }
+      status = 'completed'
+      return Response.json({ id, status, audioHash, result, resultHash }, { status: 202 })
+    }
+    if (path.endsWith('/cancel')) { status = 'cancelled'; return Response.json({ id, status, audioHash }) }
+    return Response.json({ id, status, audioHash, ...(status === 'completed' ? { result, resultHash } : {}) })
+  }) as typeof fetch
+  return { fetchFn, seen, result, id }
+}
+
+// 27-nov-2026: Rec82 to Rec86 failed for good with "Remote worker awaiting-upload; automatic retry
+// disabled" while the host ran HiDock's own diarization. The host took no audio, so the refusal is
+// one the engine chain may send again, and the next try reuses the same job.
+it('a busy host gives a retryable refusal, and the next try sends the same job', async () => {
+  directory = await mkdtemp(join(tmpdir(), 'hidock-remote-busy-'))
+  const path = join(directory, 'sample.wav')
+  const audio = Buffer.from('queued recording')
+  await writeFile(path, audio)
+  const host = busyHost('transcription', 1, createHash('sha256').update(audio).digest('hex'))
+  const entries = new Map<string, RemoteJobIdentity>()
+  const run = () => runRemoteWorkerJob({ path, base: 'http://127.0.0.1:8765', token: 'test', model: 'voice',
+    stage: 'transcription', language: 'es', recordingId: 'rec-82', timeoutMs: 10_000, fetchFn: host.fetchFn,
+    store: { load: key => entries.get(key), save: (key, value) => { entries.set(key, value) } } })
+  const refusal = await run().catch((error: Error) => error)
+  expect(refusal).toBeInstanceOf(Error)
+  expect((refusal as Error).message).toMatch(/^Remote worker busy/)
+  expect((refusal as Error).message).not.toMatch(/retry disabled|retained job identity/)
+  expect(await run()).toMatchObject({ ...host.result, hostJobId: host.id })
+  expect(host.seen.filter(s => s === 'POST /v1/jobs').length).toBe(1)
+  expect(host.seen.filter(s => s.startsWith('PUT')).length).toBe(2)
+})
+
+it('a diarization gets the same busy refusal at once, after one upload', async () => {
+  directory = await mkdtemp(join(tmpdir(), 'hidock-remote-busy-diar-'))
+  const path = join(directory, 'sample.wav')
+  const audio = Buffer.from('voice backlog')
+  await writeFile(path, audio)
+  const host = busyHost('diarization', 5, createHash('sha256').update(audio).digest('hex'))
+  await expect(runRemoteWorkerJob({ path, base: 'http://127.0.0.1:8765', token: 'test', model: 'voice',
+    recordingId: 'rec-82', timeoutMs: 10_000, fetchFn: host.fetchFn,
+    store: { load: () => undefined, save: () => {} } })).rejects.toThrow(/^Remote worker busy/)
+  expect(host.seen.filter(s => s.startsWith('PUT')).length).toBe(1)
+})

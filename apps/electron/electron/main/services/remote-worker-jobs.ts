@@ -52,7 +52,8 @@ export async function runRemoteWorkerJob(input: {
   /**
    * The host runs one job at a time and refuses an upload with 429 while another runs,
    * leaving this job awaiting-upload. With this set, the upload is tried again until the
-   * host takes it or the timeout passes; without it, the caller gets the refusal at once.
+   * host takes it or the timeout passes; without it, the caller gets "Remote worker busy"
+   * at once, which is safe to send again because the host took no audio.
    */
   waitWhileHostBusy?: boolean
 }): Promise<unknown> {
@@ -162,6 +163,8 @@ export async function runRemoteWorkerJob(input: {
     throw new Error('Remote cancellation not confirmed; retained job identity for reconciliation; automatic retry disabled')
   }
   if (cancelled()) return cancel()
+  // Whether the host's last answer to the upload was its busy refusal (HTTP 429).
+  let lastUploadBusy = false
   for (let attempt = 0; job.status === 'awaiting-upload'; attempt++) {
     if (attempt > 0) {
       // Only reached with waitWhileHostBusy, after the host said this job still has no input.
@@ -175,7 +178,6 @@ export async function runRemoteWorkerJob(input: {
     const controller = new AbortController()
     const watch = setInterval(() => { if (cancelled() || Date.now() >= deadline) controller.abort() }, 250)
     const body = createReadStream(input.path)
-    let hostBusy = false
     try {
       // Node streams the file; no full recording Buffer is retained in Electron.
       job = await request(`/v1/jobs/${identity.id}/audio`, { method: 'PUT',
@@ -184,12 +186,18 @@ export async function runRemoteWorkerJob(input: {
     } catch (error) {
       if (cancelled()) return cancel()
       // Only the host's busy refusal is worth waiting for; any other refusal ends here as before.
-      hostBusy = /Remote worker HTTP 429[^0-9]/.test(error instanceof Error ? error.message : String(error))
+      lastUploadBusy = /Remote worker HTTP 429[^0-9]/.test(error instanceof Error ? error.message : String(error))
       // The PUT may have committed even if its response was lost. Observe, never re-upload blindly.
       if (Date.now() >= deadline) throw new Error('Remote worker timeout; retained job identity for resume', { cause: error })
       job = await request(`/v1/jobs/${identity.id}`)
     } finally { clearInterval(watch); body.destroy() }
-    if (!input.waitWhileHostBusy || !hostBusy) break
+    if (!input.waitWhileHostBusy || !lastUploadBusy) break
+  }
+  if (job.status === 'awaiting-upload' && lastUploadBusy) {
+    // The host runs one job at a time and took none of this audio (27-nov-2026: Rec82 to Rec86
+    // failed for good while it ran HiDock's own diarization). The job identity is kept, so the
+    // engine chain's normal backoff sends this same job again; no "retry disabled" here.
+    throw new Error('Remote worker busy: the host is running another job and has not taken this audio')
   }
   for (;;) {
     if (cancelled()) return cancel()
