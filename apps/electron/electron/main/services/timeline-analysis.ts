@@ -37,7 +37,7 @@ import { getRecordingById, resolveRecordingId, queryOne, queryAll, run } from '.
 import { isRecordingEligible } from './recording-eligibility'
 import { eligibleToGenerate } from './brains/eligibility'
 import { providerCheckpoints } from './provider-checkpoints'
-// Static: runtime reaches timeline-analysis only through a dynamic import, so there is no load cycle.
+// device-recording-runtime imports this module too; both sides use the other only inside functions.
 import { applyExistingDeviceMarkerAnalysis } from './device-recording-runtime'
 
 export interface SentimentSegment {
