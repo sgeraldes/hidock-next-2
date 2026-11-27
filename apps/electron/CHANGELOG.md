@@ -4,6 +4,10 @@ Each entry is one day of merged work. The Releases page in Settings reads this f
 
 Device reference: [model/version gates, recordings and native markers](../../docs/devices/README.md). The 11 October firmware documentation describes offline research and local tooling, not an additional merged device-firmware feature. Older release entries retain their dated scope.
 
+## 2026-11-27 | Model Host 0.6.1: Fix times on the Gamestation works
+
+- Model Host 0.6.1 fixes word alignment, which failed on every job in 0.6.0 because its worker could not find the Parakeet code next to it. Until the update reached the Gamestation, Fix times placed the lines from the speech on this computer. HiDock sends the update; nothing is done there by hand.
+
 ## 2026-11-26 | What plays or records, in the header; Fix times hears the words, on the Gamestation
 
 - The search moved to the far left of the header. The right side now shows what is playing or recording, with its controls.

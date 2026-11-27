@@ -1,6 +1,8 @@
 """Word timestamps from Parakeet tokens, without importing a model runtime."""
 import importlib.util
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -62,6 +64,19 @@ class WordsFromTokensTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             worker.check_duration(worker.MAX_ALIGN_SECONDS * 16000 + 16001, 16000)
         worker.check_duration(60 * 16000, 16000)
+
+
+class StandaloneLaunchTests(unittest.TestCase):
+    def test_runs_as_the_host_starts_it(self):
+        # The host's embeddable Python (a ._pth file) does not put the script's folder on sys.path,
+        # and the job runs from another working directory. -P gives the same path here. Before
+        # 0.6.1 every align job failed with "No module named 'parakeet_worker'".
+        with tempfile.TemporaryDirectory() as elsewhere:
+            run = subprocess.run([sys.executable, "-P", str(SRC / "align_worker.py"), "--help"], cwd=elsewhere,
+                                 capture_output=True, text=True, timeout=60)
+        self.assertNotIn("ModuleNotFoundError", run.stderr)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("--worker-dir", run.stdout)
 
 
 if __name__ == "__main__":

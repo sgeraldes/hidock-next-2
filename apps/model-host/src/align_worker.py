@@ -15,6 +15,8 @@ import sys
 import tempfile
 import time
 
+# The host's embeddable Python does not put this folder on sys.path (asr_worker.py does the same).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from parakeet_worker import (ARTIFACT, MODEL, has_nonzero_samples, make_recognizer, model_files,
                              normalized_audio, silence_aware_windows)
 
