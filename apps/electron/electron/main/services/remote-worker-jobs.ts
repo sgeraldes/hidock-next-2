@@ -53,6 +53,9 @@ export async function runRemoteWorkerJob(input: {
    * The host runs one job at a time and refuses an upload with 429 while another runs,
    * leaving this job awaiting-upload. With this set, the upload is tried again until the
    * host takes it or the timeout passes; without it, the caller gets the refusal at once.
+   * Transcription and alignment wait by default (27-nov-2026: five new recordings failed
+   * while the host ran HiDock's own diarization); diarization and VAD do not, because
+   * their callers already route a busy host elsewhere.
    */
   waitWhileHostBusy?: boolean
 }): Promise<unknown> {
@@ -66,6 +69,7 @@ export async function runRemoteWorkerJob(input: {
   }
   const base = input.base.replace(/\/+$/, '')
   const stage = input.stage ?? 'diarization'
+  const waitWhileHostBusy = input.waitWhileHostBusy ?? (stage === 'transcription' || stage === 'alignment')
   const language = stage === 'transcription' ? input.language || 'es' : input.language
   if (input.channelMode && (input.channelMode !== 'separate' || stage !== 'transcription')) throw new Error('Invalid remote channel mode')
   const channelMap = input.channelMap?.map(row => ({ ...row })).sort((a, b) => a.sourceChannel - b.sourceChannel)
@@ -189,7 +193,7 @@ export async function runRemoteWorkerJob(input: {
       if (Date.now() >= deadline) throw new Error('Remote worker timeout; retained job identity for resume', { cause: error })
       job = await request(`/v1/jobs/${identity.id}`)
     } finally { clearInterval(watch); body.destroy() }
-    if (!input.waitWhileHostBusy || !hostBusy) break
+    if (!waitWhileHostBusy || !hostBusy) break
   }
   for (;;) {
     if (cancelled()) return cancel()
