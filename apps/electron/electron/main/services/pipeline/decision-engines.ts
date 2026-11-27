@@ -1,5 +1,7 @@
 import type { JevAnswer, JevQuestion, JevResponse, JevStructured } from '../jev-client'
-import type { JevHarness } from './jev-harness'
+import { createJevHarness, type JevHarness } from './jev-harness'
+import { createTextRunner } from './runner'
+import { jevKeyFor } from '../jev-settings'
 import { recordHarnessUsage } from '../brains/harness-usage'
 import { checkModelHost, decideOnModelHost } from '../model-host-client'
 import { describeError, trackCall } from './track-call'
@@ -123,8 +125,8 @@ export class DecisionEnginesError extends AggregateError {
 
 /** Create per request so current credentials, pairing and provider switches are respected. */
 export async function createDecisionEngines(step: DecisionStep, deps: Pick<DecisionDeps, 'jev' | 'shouldGenerate'> = {}): Promise<DecisionEngine[]> {
-  const [{ getConfig }, brains, { createTextRunner }, { createJevHarness }, { jevKeyFor }, { CURRENT_GEMINI_CHAT_MODEL }] = await Promise.all([
-    import('../config'), import('../brains'), import('./runner'), import('./jev-harness'), import('../jev-settings'), import('../gemini-model-ids')
+  const [{ getConfig }, brains, { CURRENT_GEMINI_CHAT_MODEL }] = await Promise.all([
+    import('../config'), import('../brains'), import('../gemini-model-ids')
   ])
   const config = getConfig()
   const settings = { url: config.transcription?.modelHostUrl ?? '', token: config.transcription?.modelHostToken ?? '' }
