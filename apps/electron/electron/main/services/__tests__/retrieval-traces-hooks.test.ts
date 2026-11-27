@@ -233,10 +233,31 @@ describe('request hooks to real temporary trace SQLite', () => {
     expect(response.answer).toBe('answer')
     const sent = JSON.stringify(state.generate.mock.calls[0][0])
     expect(sent).toContain('semantic search is temporarily unavailable')
+    expect(sent).toContain('Remote semantic model is not ready')
     await store.flush()
     const row = (await store.read())[0]
     expect(row.status).toBe('error')
     expect(row.retrieval_issue).toBe('provider-failure')
+  })
+  it('says the transcript search did not run when other context still answers', async () => {
+    state.graph = false
+    state.search.mockRejectedValue(new Error('Remote semantic model is not ready'))
+    const response = await getRAGService().chat('session', 'question')
+    expect(response.answer).toBe('answer')
+    const sent = JSON.stringify(state.generate.mock.calls[0][0])
+    expect(sent).toContain('pinned text')
+    expect(sent).toContain('the transcript search did not run')
+  })
+  it('keeps a cancel during a failing search a cancel, with no generation', async () => {
+    let failSearch!: () => void
+    state.search.mockImplementationOnce(() => new Promise((_resolve, reject) => { failSearch = () => reject(new Error('aborted embed')) }))
+    const service = getRAGService()
+    const pendingChat = service.chat('session', 'question')
+    await vi.waitFor(() => expect(failSearch).toBeTypeOf('function'))
+    expect(service.cancelRequest('session')).toBe(true)
+    failSearch()
+    await expect(pendingChat).rejects.toThrow('aborted embed')
+    expect(state.generate).not.toHaveBeenCalled()
   })
   it('records Explore results with order and scores', async () => {
     await getRAGService().globalSearch('Title Summary')
