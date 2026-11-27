@@ -1593,7 +1593,7 @@ export interface ElectronAPI {
     stopBluetoothScan: () => Promise<any>
     getBluetoothStatus: () => Promise<any>
     // Push event subscriptions
-    getState: () => Promise<{ connected: boolean; model: string | null; serialNumber: string | null; versionCode: string | null; versionNumber: number | null; recording: string | null }>
+    getState: () => Promise<{ connected: boolean; model: string | null; serialNumber: string | null; versionCode: string | null; versionNumber: number | null; recording: string | null; listBusy?: boolean }>
     onStateChanged: (callback: (state: { connected: boolean; model: string | null; serialNumber: string | null; versionCode: string | null; versionNumber: number | null }) => void) => () => void
     onConnect: (callback: () => void) => () => void
     onDisconnect: (callback: () => void) => () => void

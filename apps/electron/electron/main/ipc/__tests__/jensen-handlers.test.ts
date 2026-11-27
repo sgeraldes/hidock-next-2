@@ -1255,6 +1255,13 @@ describe('main-process library transfer', () => {
       expect(state).toMatchObject({ connected: true, recording: '2026Jul22-120145-Rec26.hda' })
     })
 
+    it('jensen:getState says the file list must wait while an operation owns the device', async () => {
+      mockJensen.isOperationInProgress.mockReturnValue(true)
+      expect(await mockHandlers['jensen:getState'](makeEvent())).toMatchObject({ listBusy: true })
+      mockJensen.isOperationInProgress.mockReturnValue(false)
+      expect(await mockHandlers['jensen:getState'](makeEvent())).toMatchObject({ listBusy: false })
+    })
+
     it('jensen:getState reports recording: null when the device is idle', async () => {
       const state = await mockHandlers['jensen:getState'](makeEvent())
       expect(state).toMatchObject({ recording: null })

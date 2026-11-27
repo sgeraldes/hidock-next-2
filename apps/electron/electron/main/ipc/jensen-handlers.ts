@@ -706,6 +706,9 @@ export function registerJensenHandlers(): void {
     // read). A reloaded renderer missed the change broadcast and needs this
     // to seed its recording indicator + dirty-mark reconciliation.
     recording: lastRecordingFilename ?? null,
+    // A download or another operation owns the USB stream, so jensen:listFiles
+    // stands down and returns null. The renderer waits instead of calling it a failure.
+    listBusy: device.isOperationInProgress() || getActiveTransferFilename() !== null,
   }))
 
   ipcMain.handle('jensen:tryConnect', async () => {
