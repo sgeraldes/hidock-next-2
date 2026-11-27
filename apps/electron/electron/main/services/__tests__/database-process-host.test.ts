@@ -13,7 +13,7 @@ import { deserializeError, serializeError, type MainToProcess, type ProcessToMai
 
 interface FakeProcess extends BackupWorkerProcess { crash(code?: number): void; fromProcess(message: ProcessToMain): void; closes: number }
 
-function fakeProcess(operations: Record<string, (...args: any[]) => unknown>, options: { failOpen?: boolean } = {}): FakeProcess {
+function fakeProcess(operations: Record<string, (...args: any[]) => unknown>, options: { failOpen?: boolean; openGate?: Promise<void>; inits?: unknown[]; configs?: unknown[] } = {}): FakeProcess {
   const events = new EventEmitter()
   let alive = true
   const proc = {
@@ -36,11 +36,13 @@ function fakeProcess(operations: Record<string, (...args: any[]) => unknown>, op
   const server = createDatabaseServer({
     send: (message: ProcessToMain) => { if (alive) queueMicrotask(() => events.emit('message', structuredClone(message))) },
     operations: () => operations,
-    open: async () => {
+    open: async (init) => {
+      options.inits?.push(init)
+      if (options.openGate) await options.openGate
       if (options.failOpen) throw new Error('cannot open the library')
       return 75
     },
-    applyConfig: () => undefined,
+    applyConfig: (config) => { options.configs?.push(config) },
     close: () => { proc.closes++ },
     exit: (code) => proc.crash(code),
     closeGraceMs: 20,
@@ -171,5 +173,113 @@ describe('in-process database client', () => {
     expect(await pending).toEqual({ pid: 1 })
     await expect((client.call as (op: string) => Promise<unknown>)('__proto__')).rejects.toThrow(/No database operation named __proto__/)
     await expect((client.call as (op: string) => Promise<unknown>)('constructor')).rejects.toThrow(/No database operation/)
+  })
+})
+
+describe('database process host: close and restart races (review of #206)', () => {
+  it('rejects start and resolves close when close comes during the boot, and never forks again', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let forks = 0
+    const host = createDatabaseProcessHost({
+      fork: () => { forks++; return fakeProcess({}, { openGate: gate }) },
+      backup: async () => undefined,
+      restartDelaysMs: [1],
+    })
+    const started = host.start(init)
+    await new Promise((r) => setTimeout(r, 5))
+    const closing = host.close()
+    release()
+    await expect(started).rejects.toBeInstanceOf(DatabaseProcessExitedError)
+    await closing
+    await new Promise((r) => setTimeout(r, 20))
+    expect(host.state()).toBe('closed')
+    expect(forks).toBe(1)
+  })
+
+  it('resolves close when the boot fails while closing', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const host = createDatabaseProcessHost({ fork: () => fakeProcess({}, { openGate: gate, failOpen: true }), backup: async () => undefined })
+    const started = host.start(init).catch((e: unknown) => e)
+    await new Promise((r) => setTimeout(r, 5))
+    const closing = host.close()
+    release()
+    await closing
+    expect(host.state()).toBe('closed')
+    expect(await started).toBeInstanceOf(Error)
+  })
+
+  it('restarts with the latest config, opening the exact schema only', async () => {
+    const inits: unknown[] = []
+    const configs: unknown[] = []
+    const forks: FakeProcess[] = []
+    const host = createDatabaseProcessHost({
+      fork: () => { const p = fakeProcess({ ping: () => 1 }, { inits, configs }); forks.push(p); return p },
+      backup: async () => undefined,
+      restartDelaysMs: [1],
+    })
+    await host.start({ config: { v: 1 }, appVersion: 't', boot: 'full' })
+    host.sendConfig({ v: 2 })
+    forks[0].crash()
+    await new Promise((r) => setTimeout(r, 5))
+    host.sendConfig({ v: 3 })
+    expect(await host.call('ping', [])).toBe(1)
+    // The restart's init carried the config saved before it; the one saved
+    // during its boot follows as soon as it is ready.
+    expect(inits).toEqual([
+      { config: { v: 1 }, appVersion: 't', boot: 'full' },
+      { config: { v: 2 }, appVersion: 't', boot: 'existing-schema-only' },
+    ])
+    expect(configs[configs.length - 1]).toEqual({ v: 3 })
+    await host.close()
+  })
+})
+
+describe('database process server (review of #206)', () => {
+  it('closes after the open finishes when close arrives during the open, and never reports ready', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const sent: ProcessToMain[] = []
+    let closes = 0
+    let exits = 0
+    const server = createDatabaseServer({
+      send: (m) => { sent.push(m) },
+      operations: () => ({}),
+      open: async () => { await gate; return 75 },
+      applyConfig: () => undefined,
+      close: () => { closes++ },
+      exit: () => { exits++ },
+    })
+    server.handle({ type: 'init', init })
+    server.handle({ type: 'close' })
+    expect(closes).toBe(0)
+    release()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(closes).toBe(1)
+    expect(exits).toBe(1)
+    expect(sent.map((m) => m.type)).toEqual(['closed'])
+  })
+
+  it('rebuilds a backup failure with its name and fields', async () => {
+    const sent: ProcessToMain[] = []
+    let backup!: (request: never) => Promise<void>
+    const server = createDatabaseServer({
+      send: (m) => { sent.push(m) },
+      operations: () => ({}),
+      open: async (_init, hooks) => { backup = hooks.backup as never; return 75 },
+      applyConfig: () => undefined,
+      close: () => undefined,
+      exit: () => undefined,
+    })
+    server.handle({ type: 'init', init })
+    await new Promise((r) => setTimeout(r, 1))
+    const pending = backup({} as never).catch((e: unknown) => e)
+    const request = sent.find((m) => m.type === 'backup-request') as { id: number }
+    server.handle({ type: 'backup-result', id: request.id, ok: false, error: serializeError(Object.assign(new Error('disk full'), { name: 'BackupSpaceError', code: 'ENOSPC' })) })
+    const error = (await pending) as Error & { code?: string }
+    expect(error.name).toBe('BackupSpaceError')
+    expect(error.message).toBe('disk full')
+    expect(error.code).toBe('ENOSPC')
   })
 })

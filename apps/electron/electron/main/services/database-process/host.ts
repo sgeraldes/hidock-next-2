@@ -6,7 +6,7 @@
 import type { BootProgress } from '@hidock/database'
 import type { BackupWorkerProcess, DatabaseBackupExecutor } from '../sqlite-backup-executor'
 import type { DatabaseProcessInit, MainToProcess, ProcessToMain, SerializedError } from './protocol'
-import { deserializeError } from './protocol'
+import { deserializeError, serializeError } from './protocol'
 
 /** A request that was in flight when the process exited: whether a write committed is unknown, so re-read. */
 export class DatabaseProcessExitedError extends Error {
@@ -66,6 +66,10 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
   const queued: Array<{ id: number; op: string; args: unknown[] }> = []
   const exits: number[] = []
   let readyWaiter: { resolve: (v: number) => void; reject: (e: Error) => void } | null = null
+  /** After the first boot a restart opens the exact schema only: the migration already ran. */
+  let booted = false
+  /** A config saved while the process was booting: sent once it is ready. */
+  let configPending = false
   let closeWaiter: (() => void) | null = null
   const backupControllers = new Map<number, AbortController>()
 
@@ -104,13 +108,32 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
     const message = value as ProcessToMain
     switch (message.type) {
       case 'ready':
+        if (state === 'closing' || state === 'closed') {
+          readyWaiter?.reject(new DatabaseProcessExitedError('The database process was closed while it started'))
+          readyWaiter = null
+          return
+        }
+        booted = true
         state = 'ready'
+        if (configPending && init) {
+          configPending = false
+          try { post({ type: 'config', config: init.config }) } catch (error) {
+            console.warn('[DatabaseProcess] could not send the config:', error)
+          }
+        }
         readyWaiter?.resolve(message.schemaVersion)
         readyWaiter = null
         flushQueue()
         return
       case 'init-failed': {
         const error = rebuild(message.error)
+        if (state === 'closing' || state === 'closed') {
+          // The exit that follows resolves close().
+          readyWaiter?.reject(error)
+          readyWaiter = null
+          rejectAll(error, true)
+          return
+        }
         failure = error
         state = 'failed'
         readyWaiter?.reject(error)
@@ -149,7 +172,7 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
           () => { try { post({ type: 'backup-result', id: message.id, ok: true }) } catch { /* process gone */ } },
           (error: Error) => {
             try {
-              post({ type: 'backup-result', id: message.id, ok: false, error: { name: error.name, message: error.message } })
+              post({ type: 'backup-result', id: message.id, ok: false, error: serializeError(error) })
             } catch { /* process gone */ }
           }
         ).finally(() => backupControllers.delete(message.id))
@@ -167,7 +190,8 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
     current.on('error', (error: Error) => console.error('[DatabaseProcess] process error:', error))
     current.once('exit', (code: number | null) => onExit(current, code))
     const sendInit = () => {
-      try { current.postMessage({ type: 'init', init: init! }) } catch (error) {
+      const message: DatabaseProcessInit = booted ? { ...init!, boot: 'existing-schema-only' } : init!
+      try { current.postMessage({ type: 'init', init: message }) } catch (error) {
         console.error('[DatabaseProcess] could not send init:', error)
       }
     }
@@ -258,7 +282,13 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
       })
     },
     sendConfig(config) {
-      if (!child) return
+      // A restart opens with the config main has now, not the one it started with.
+      if (init) init = { ...init, config }
+      if (!child || state !== 'ready') {
+        // The init already sent may predate this save; the process gets it when ready.
+        if (child) configPending = true
+        return
+      }
       try { post({ type: 'config', config }) } catch (error) {
         console.warn('[DatabaseProcess] could not send the config:', error)
       }
@@ -274,6 +304,8 @@ export function createDatabaseProcessHost(deps: DatabaseProcessHostDependencies)
       })
       const running = child
       state = 'closing'
+      readyWaiter?.reject(new DatabaseProcessExitedError('The database process was closed while it started'))
+      readyWaiter = null
       if (!running) {
         state = 'closed'
         rejectAll(new DatabaseProcessExitedError('The database process is closed'), true)

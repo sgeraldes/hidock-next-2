@@ -10,7 +10,7 @@
  */
 import type { BootProgress, DatabaseBackupExecutor } from '@hidock/database'
 import type { DatabaseProcessInit, MainToProcess, ProcessToMain, SerializedError } from './protocol'
-import { serializeError } from './protocol'
+import { deserializeError, serializeError } from './protocol'
 
 export interface DatabaseServerDependencies {
   send: (message: ProcessToMain) => void
@@ -117,10 +117,13 @@ export function createDatabaseServer(deps: DatabaseServerDependencies): Database
           }
           deps.open(message.init, { onProgress: (progress) => deps.send({ type: 'boot-progress', progress }), backup }).then(
             (schemaVersion) => {
+              // A close that came during the boot waited for it: close now, never report ready.
+              if (state === 'closing') return finishClose()
               state = 'ready'
               deps.send({ type: 'ready', schemaVersion })
             },
             (error) => {
+              if (state === 'closing') return finishClose()
               state = 'failed'
               deps.send({ type: 'init-failed', error: serializeError(error) })
             }
@@ -145,18 +148,23 @@ export function createDatabaseServer(deps: DatabaseServerDependencies): Database
           if (!pending) return
           backups.delete(message.id)
           if (message.ok) pending.resolve()
-          else pending.reject(Object.assign(new Error(message.error.message), { name: message.error.name }))
+          else pending.reject(deserializeError(message.error))
           return
         }
-        case 'close':
+        case 'close': {
           if (state === 'closing') return
+          const wasOpening = state === 'opening'
           state = 'closing'
+          // The boot is a migration and a snapshot: closing the connection under
+          // it would fail it halfway. It finishes, then the open's handler closes.
+          if (wasOpening) return
           // Nothing new starts. A running pass gets a moment to finish its
           // unit; after that the connection closes under it, its next call
           // fails, and every unit it committed stays committed.
           if (running === 0) finishClose()
           else setTimeout(finishClose, deps.closeGraceMs ?? 3000)
           return
+        }
       }
     },
   }
